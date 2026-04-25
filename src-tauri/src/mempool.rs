@@ -1,15 +1,16 @@
-//! Mempool subscription worker.
+//! Mempool subscription workers (one per enabled EVM chain).
 //!
-//! Connects to a user-supplied JSON-RPC WebSocket (typically Alchemy / QuickNode
-//! / Infura on Ethereum mainnet) and streams pending transactions to the
-//! frontend as Tauri events. We try the richer `alchemy_pendingTransactions`
-//! subscription first (returns full tx bodies); on providers that don't support
-//! it, we fall back to `eth_subscribe newPendingTransactions` (hashes only) and
-//! enrich each tx with a follow-up `eth_getTransactionByHash` over HTTP.
+//! Each worker connects to a user-supplied JSON-RPC WebSocket and streams
+//! pending transactions to the frontend as Tauri events tagged with the chain
+//! id. We try the richer `alchemy_pendingTransactions` subscription first
+//! (returns full tx bodies); on providers that don't support it (e.g.
+//! publicnode) we fall back to `eth_subscribe newPendingTransactions` (hashes
+//! only) and enrich each tx with a follow-up `eth_getTransactionByHash` over
+//! HTTP.
 
 use crate::decoder;
 use crate::state::AppState;
-use crate::types::{ConnectionStatus, Filters, PendingTx};
+use crate::types::{ChainConfig, ConnectionStatus, Filters, PendingTx};
 use anyhow::{anyhow, Context};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
@@ -23,62 +24,6 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 const EVENT_PENDING: &str = "mempool://pending";
 const EVENT_STATUS: &str = "mempool://status";
 
-/// Spawn the worker task. Cancels any previously running worker first.
-pub async fn restart(app: AppHandle, state: AppState) {
-    {
-        let mut guard = state.worker.lock().await;
-        if let Some(handle) = guard.take() {
-            *state.shutdown.write() = true;
-            handle.abort();
-        }
-        *state.shutdown.write() = false;
-    }
-
-    let app_clone = app.clone();
-    let state_clone = state.clone();
-    let handle = tokio::spawn(async move {
-        run_with_reconnect(app_clone, state_clone).await;
-    });
-    *state.worker.lock().await = Some(handle);
-}
-
-async fn run_with_reconnect(app: AppHandle, state: AppState) {
-    let mut backoff = Duration::from_secs(2);
-    loop {
-        if *state.shutdown.read() {
-            return;
-        }
-
-        let url = { state.settings.read().rpc_ws_url.clone() };
-        if url.is_empty() {
-            update_status_keyed(&app, &state, false, "status.no_rpc", HashMap::new());
-            tokio::time::sleep(Duration::from_secs(3)).await;
-            continue;
-        }
-
-        let mut p = HashMap::new();
-        p.insert("url".into(), redact(&url));
-        update_status_keyed(&app, &state, false, "status.connecting", p);
-
-        match run_once(&app, &state, &url).await {
-            Ok(()) => {
-                // Stream ended cleanly (rare); reconnect with short delay.
-                update_status_keyed(&app, &state, false, "status.closed", HashMap::new());
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                backoff = Duration::from_secs(2);
-            }
-            Err(e) => {
-                let mut p = HashMap::new();
-                p.insert("err".into(), e.to_string());
-                p.insert("secs".into(), backoff.as_secs().to_string());
-                update_status_keyed(&app, &state, false, "status.disconnected", p);
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(Duration::from_secs(30));
-            }
-        }
-    }
-}
-
 /// How long to wait for the first pending-tx notification after an
 /// `alchemy_pendingTransactions` subscription is acknowledged. Some providers
 /// (e.g. publicnode) silently accept the subscribe call and return an id but
@@ -87,10 +32,106 @@ async fn run_with_reconnect(app: AppHandle, state: AppState) {
 const ALCHEMY_PROBE_SECS: u64 = 7;
 const SUBSCRIBE_ACK_SECS: u64 = 5;
 
-async fn run_once(app: &AppHandle, state: &AppState, ws_url: &str) -> anyhow::Result<()> {
-    let request = ws_url
+/// Cancel all running workers and spawn a fresh one for every enabled chain.
+pub async fn restart(app: AppHandle, state: AppState) {
+    {
+        let mut guard = state.workers.lock().await;
+        *state.shutdown.write() = true;
+        for (_, handle) in guard.drain() {
+            handle.abort();
+        }
+        *state.shutdown.write() = false;
+    }
+
+    let chains = { state.settings.read().chains.clone() };
+    for chain in chains {
+        if !chain.enabled {
+            // Reset to idle in case it was previously streaming.
+            update_status_keyed(
+                &app,
+                &state,
+                &chain,
+                false,
+                "status.idle",
+                HashMap::new(),
+            );
+            continue;
+        }
+        let app_clone = app.clone();
+        let state_clone = state.clone();
+        let chain_id = chain.id.clone();
+        let handle = tokio::spawn(async move {
+            run_with_reconnect(app_clone, state_clone, chain).await;
+        });
+        state.workers.lock().await.insert(chain_id, handle);
+    }
+}
+
+async fn run_with_reconnect(app: AppHandle, state: AppState, chain: ChainConfig) {
+    let mut backoff = Duration::from_secs(2);
+    loop {
+        if *state.shutdown.read() {
+            return;
+        }
+
+        // The chain config can be edited at runtime; re-read each loop so the
+        // worker picks up URL changes without a full restart.
+        let current = current_chain(&state, &chain.id).unwrap_or_else(|| chain.clone());
+        if !current.enabled {
+            update_status_keyed(&app, &state, &current, false, "status.idle", HashMap::new());
+            return;
+        }
+        if current.rpc_ws_url.is_empty() {
+            update_status_keyed(&app, &state, &current, false, "status.no_rpc", HashMap::new());
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            continue;
+        }
+
+        let mut p = HashMap::new();
+        p.insert("url".into(), redact(&current.rpc_ws_url));
+        update_status_keyed(&app, &state, &current, false, "status.connecting", p);
+
+        match run_once(&app, &state, &current).await {
+            Ok(()) => {
+                update_status_keyed(
+                    &app,
+                    &state,
+                    &current,
+                    false,
+                    "status.closed",
+                    HashMap::new(),
+                );
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                backoff = Duration::from_secs(2);
+            }
+            Err(e) => {
+                let mut p = HashMap::new();
+                p.insert("err".into(), e.to_string());
+                p.insert("secs".into(), backoff.as_secs().to_string());
+                update_status_keyed(&app, &state, &current, false, "status.disconnected", p);
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(30));
+            }
+        }
+    }
+}
+
+fn current_chain(state: &AppState, id: &str) -> Option<ChainConfig> {
+    state
+        .settings
+        .read()
+        .chains
+        .iter()
+        .find(|c| c.id == id)
+        .cloned()
+}
+
+async fn run_once(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> anyhow::Result<()> {
+    let request = chain
+        .rpc_ws_url
+        .as_str()
         .into_client_request()
-        .with_context(|| format!("Invalid WebSocket URL: {}", ws_url))?;
+        .with_context(|| format!("Invalid WebSocket URL: {}", chain.rpc_ws_url))?;
     let (mut ws, _) = tokio_tungstenite::connect_async(request)
         .await
         .with_context(|| "WebSocket handshake failed")?;
@@ -105,8 +146,6 @@ async fn run_once(app: &AppHandle, state: &AppState, ws_url: &str) -> anyhow::Re
     ws.send(Message::Text(alchemy_sub.to_string().into())).await?;
 
     let mut alchemy_sub_id: Option<String> = None;
-    // Wait for the first response — either ack or error — with a timeout so
-    // a provider that never replies doesn't wedge the worker forever.
     if let Ok(Some(Ok(Message::Text(text)))) =
         tokio::time::timeout(Duration::from_secs(SUBSCRIBE_ACK_SECS), ws.next()).await
     {
@@ -116,10 +155,9 @@ async fn run_once(app: &AppHandle, state: &AppState, ws_url: &str) -> anyhow::Re
         }
     }
 
-    // If alchemy was acked, probe for an actual notification. Some providers
-    // ack the subscribe call but never push — the explicit fallback below
-    // covers that case. Any notification we receive during the probe is
-    // buffered and replayed into the main loop so we don't drop it.
+    // Probe for an actual notification — some providers ack the subscribe call
+    // but never push. Any notification received during the probe is buffered
+    // and replayed into the main loop.
     let mut buffered: Option<Message> = None;
     if let Some(sub_id) = &alchemy_sub_id {
         match tokio::time::timeout(
@@ -131,8 +169,6 @@ async fn run_once(app: &AppHandle, state: &AppState, ws_url: &str) -> anyhow::Re
             Ok(Ok(Some(msg))) => {
                 buffered = Some(msg);
             }
-            // Timeout, ws error, or ws closed before any notification arrived.
-            // Unsubscribe alchemy and fall back to the standard subscription.
             _ => {
                 let unsub = json!({
                     "jsonrpc": "2.0",
@@ -147,7 +183,6 @@ async fn run_once(app: &AppHandle, state: &AppState, ws_url: &str) -> anyhow::Re
     }
 
     if alchemy_sub_id.is_none() {
-        // Fallback: subscribe to plain newPendingTransactions (hashes only).
         let std_sub = json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -177,9 +212,9 @@ async fn run_once(app: &AppHandle, state: &AppState, ws_url: &str) -> anyhow::Re
         }
     }
 
-    update_status_keyed(app, state, true, "status.streaming", HashMap::new());
+    update_status_keyed(app, state, chain, true, "status.streaming", HashMap::new());
 
-    let http_url = { state.settings.read().rpc_http_url.clone() };
+    let http_url = chain.rpc_http_url.clone();
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
         .build()
@@ -218,19 +253,17 @@ async fn run_once(app: &AppHandle, state: &AppState, ws_url: &str) -> anyhow::Re
             None => continue,
         };
 
-        // Either a full tx object (alchemy) or a bare hash string (standard).
         let pending_tx = if params.is_object() {
-            build_pending_tx(&params, state).await
+            build_pending_tx(&params, state, chain).await
         } else if let Some(hash) = params.as_str() {
             if let (Some(client), Some(http_url)) = (http_client.as_ref(), nonempty(&http_url)) {
                 if let Some(tx) = fetch_tx_by_hash(client, http_url, hash).await {
-                    build_pending_tx(&tx, state).await
+                    build_pending_tx(&tx, state, chain).await
                 } else {
                     continue;
                 }
             } else {
-                // We only have a hash and no HTTP RPC to enrich it. Emit a stub.
-                Some(stub_from_hash(hash))
+                Some(stub_from_hash(hash, chain))
             }
         } else {
             None
@@ -262,7 +295,11 @@ async fn fetch_tx_by_hash(
     json.get("result").cloned().filter(|r| !r.is_null())
 }
 
-async fn build_pending_tx(raw: &Value, state: &AppState) -> Option<PendingTx> {
+async fn build_pending_tx(
+    raw: &Value,
+    state: &AppState,
+    chain: &ChainConfig,
+) -> Option<PendingTx> {
     let hash = raw.get("hash")?.as_str()?.to_string();
     let from = raw
         .get("from")
@@ -276,7 +313,7 @@ async fn build_pending_tx(raw: &Value, state: &AppState) -> Option<PendingTx> {
     let value_hex = raw.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
     let value_wei = decoder::hex_to_decimal_string(value_hex);
     let value_wei_f = decoder::parse_hex_wei(value_hex).unwrap_or(0.0);
-    let value_eth = value_wei_f / 1e18;
+    let value_native = value_wei_f / 1e18;
 
     let gas_gwei = raw
         .get("maxFeePerGas")
@@ -301,19 +338,21 @@ async fn build_pending_tx(raw: &Value, state: &AppState) -> Option<PendingTx> {
     };
     let (label, summary) = decoder::decode(&input);
 
-    let eth_usd = state.prices.eth_usd().await;
-    let value_usd = if eth_usd > 0.0 {
-        Some(value_eth * eth_usd)
+    let native_usd = state.prices.usd(&chain.coingecko_id).await;
+    let value_usd = if native_usd > 0.0 {
+        Some(value_native * native_usd)
     } else {
         None
     };
 
     Some(PendingTx {
+        chain: chain.id.clone(),
+        native_symbol: chain.native_symbol.clone(),
         hash,
         from,
         to,
         value_wei,
-        value_eth,
+        value_native,
         value_usd,
         gas_gwei,
         gas_limit,
@@ -325,13 +364,15 @@ async fn build_pending_tx(raw: &Value, state: &AppState) -> Option<PendingTx> {
     })
 }
 
-fn stub_from_hash(hash: &str) -> PendingTx {
+fn stub_from_hash(hash: &str, chain: &ChainConfig) -> PendingTx {
     PendingTx {
+        chain: chain.id.clone(),
+        native_symbol: chain.native_symbol.clone(),
         hash: hash.to_string(),
         from: String::new(),
         to: None,
         value_wei: "0".into(),
-        value_eth: 0.0,
+        value_native: 0.0,
         value_usd: None,
         gas_gwei: None,
         gas_limit: None,
@@ -350,11 +391,11 @@ fn passes_filters(tx: &PendingTx, filters: &Filters, state: &AppState) -> bool {
         tx.from == a || tx.to.as_deref().unwrap_or("") == a
     });
 
-    let eth_ok = filters.min_value_eth == 0.0 || tx.value_eth >= filters.min_value_eth;
+    let native_ok = filters.min_value_eth == 0.0 || tx.value_native >= filters.min_value_eth;
     let usd_ok = filters.min_value_usd > 0.0
         && tx.value_usd.map(|v| v >= filters.min_value_usd).unwrap_or(false);
 
-    if !watchlist_hit && !eth_ok && !usd_ok {
+    if !watchlist_hit && !native_ok && !usd_ok {
         return false;
     }
 
@@ -373,21 +414,21 @@ fn passes_filters(tx: &PendingTx, filters: &Filters, state: &AppState) -> bool {
     true
 }
 
-/// Update the cached connection status and emit `mempool://status` to the
-/// frontend. The payload includes both an English fallback `message` and a
-/// localization `code`+`params` pair so the UI can render in the user's
-/// preferred language.
+/// Update the cached connection status for a chain and emit `mempool://status`
+/// to the frontend.
 fn update_status_keyed(
     app: &AppHandle,
     state: &AppState,
+    chain: &ChainConfig,
     connected: bool,
     code: &str,
     params: HashMap<String, String>,
 ) {
     let message = render_status_en(code, &params);
     let status = ConnectionStatus {
+        chain: chain.id.clone(),
         connected,
-        message: message.clone(),
+        message,
         code: Some(code.to_string()),
         params: if params.is_empty() { None } else { Some(params) },
     };
@@ -416,17 +457,14 @@ fn render_status_en(code: &str, params: &HashMap<String, String>) -> String {
     }
 }
 
-/// Emit a status update without going through the worker. Used by
+/// Mark every chain as stopped and emit a status event. Used by
 /// `stop_streaming` so the frontend status bar reflects the change immediately
 /// after the user clicks Stop.
-pub fn emit_status_keyed(
-    app: &AppHandle,
-    state: &AppState,
-    connected: bool,
-    code: &str,
-    params: HashMap<String, String>,
-) {
-    update_status_keyed(app, state, connected, code, params);
+pub fn emit_all_stopped(app: &AppHandle, state: &AppState) {
+    let chains = { state.settings.read().chains.clone() };
+    for chain in chains {
+        update_status_keyed(app, state, &chain, false, "status.stopped", HashMap::new());
+    }
 }
 
 /// Read messages off the websocket until either a pending-tx notification
@@ -446,7 +484,6 @@ async fn wait_for_pending_notification(
                 if v.get("params").and_then(|p| p.get("result")).is_some() {
                     return Ok(Some(msg));
                 }
-                // Otherwise it's an ack or unrelated reply — keep waiting.
             }
             Message::Ping(p) => {
                 ws.send(Message::Pong(p.clone())).await.ok();
@@ -459,7 +496,6 @@ async fn wait_for_pending_notification(
 }
 
 fn redact(url: &str) -> String {
-    // Hide the API key portion of the URL when logging.
     if let Some(idx) = url.rfind('/') {
         let (head, tail) = url.split_at(idx + 1);
         if tail.len() > 6 {

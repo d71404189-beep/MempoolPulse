@@ -395,3 +395,49 @@ textarea {
   place-items: center;
   text-align: center;
 }
+
+/* Multi-chain settings + table styling */
+.chains {
+  display: grid;
+  gap: 12px;
+}
+.chain-row {
+  border: 1px solid #2a2f3a;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #161922;
+}
+.chain-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.chain-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.chain-name {
+  font-size: 1rem;
+}
+.chain-symbol {
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  color: #8b93a7;
+  background: #1f2330;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.chain-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  background: #1f2330;
+  color: #b8c0d4;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
