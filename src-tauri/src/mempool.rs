@@ -9,11 +9,12 @@
 
 use crate::decoder;
 use crate::state::AppState;
-use crate::types::{Filters, PendingTx};
+use crate::types::{ConnectionStatus, Filters, PendingTx};
 use anyhow::{anyhow, Context};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -50,27 +51,27 @@ async fn run_with_reconnect(app: AppHandle, state: AppState) {
 
         let url = { state.settings.read().rpc_ws_url.clone() };
         if url.is_empty() {
-            update_status(&app, &state, false, "No RPC WebSocket URL configured.");
+            update_status_keyed(&app, &state, false, "status.no_rpc", HashMap::new());
             tokio::time::sleep(Duration::from_secs(3)).await;
             continue;
         }
 
-        update_status(&app, &state, false, format!("Connecting to {}", redact(&url)));
+        let mut p = HashMap::new();
+        p.insert("url".into(), redact(&url));
+        update_status_keyed(&app, &state, false, "status.connecting", p);
 
         match run_once(&app, &state, &url).await {
             Ok(()) => {
                 // Stream ended cleanly (rare); reconnect with short delay.
-                update_status(&app, &state, false, "Connection closed by server.");
+                update_status_keyed(&app, &state, false, "status.closed", HashMap::new());
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 backoff = Duration::from_secs(2);
             }
             Err(e) => {
-                update_status(
-                    &app,
-                    &state,
-                    false,
-                    format!("Disconnected: {}. Retrying in {}s.", e, backoff.as_secs()),
-                );
+                let mut p = HashMap::new();
+                p.insert("err".into(), e.to_string());
+                p.insert("secs".into(), backoff.as_secs().to_string());
+                update_status_keyed(&app, &state, false, "status.disconnected", p);
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(30));
             }
@@ -176,7 +177,7 @@ async fn run_once(app: &AppHandle, state: &AppState, ws_url: &str) -> anyhow::Re
         }
     }
 
-    update_status(app, state, true, "Streaming pending transactions");
+    update_status_keyed(app, state, true, "status.streaming", HashMap::new());
 
     let http_url = { state.settings.read().rpc_http_url.clone() };
     let http_client = reqwest::Client::builder()
@@ -372,20 +373,60 @@ fn passes_filters(tx: &PendingTx, filters: &Filters, state: &AppState) -> bool {
     true
 }
 
-fn update_status(app: &AppHandle, state: &AppState, connected: bool, msg: impl Into<String>) {
-    let msg = msg.into();
-    state.set_connection(connected, msg.clone());
-    let _ = app.emit(
-        EVENT_STATUS,
-        serde_json::json!({ "connected": connected, "message": msg }),
-    );
+/// Update the cached connection status and emit `mempool://status` to the
+/// frontend. The payload includes both an English fallback `message` and a
+/// localization `code`+`params` pair so the UI can render in the user's
+/// preferred language.
+fn update_status_keyed(
+    app: &AppHandle,
+    state: &AppState,
+    connected: bool,
+    code: &str,
+    params: HashMap<String, String>,
+) {
+    let message = render_status_en(code, &params);
+    let status = ConnectionStatus {
+        connected,
+        message: message.clone(),
+        code: Some(code.to_string()),
+        params: if params.is_empty() { None } else { Some(params) },
+    };
+    state.set_connection(status.clone());
+    let _ = app.emit(EVENT_STATUS, &status);
+}
+
+/// English fallback rendering for a status `code`+`params` pair. Mirrors the
+/// templates in the frontend i18n dictionary so the `message` field is
+/// always usable on its own.
+fn render_status_en(code: &str, params: &HashMap<String, String>) -> String {
+    let g = |k: &str| params.get(k).cloned().unwrap_or_default();
+    match code {
+        "status.idle" => "Idle".to_string(),
+        "status.no_rpc" => "No RPC WebSocket URL configured.".to_string(),
+        "status.connecting" => format!("Connecting to {}", g("url")),
+        "status.streaming" => "Streaming pending transactions".to_string(),
+        "status.closed" => "Connection closed by server.".to_string(),
+        "status.disconnected" => format!(
+            "Disconnected: {}. Retrying in {}s.",
+            g("err"),
+            g("secs"),
+        ),
+        "status.stopped" => "Stopped".to_string(),
+        _ => code.to_string(),
+    }
 }
 
 /// Emit a status update without going through the worker. Used by
 /// `stop_streaming` so the frontend status bar reflects the change immediately
 /// after the user clicks Stop.
-pub fn emit_status(app: &AppHandle, state: &AppState, connected: bool, msg: impl Into<String>) {
-    update_status(app, state, connected, msg);
+pub fn emit_status_keyed(
+    app: &AppHandle,
+    state: &AppState,
+    connected: bool,
+    code: &str,
+    params: HashMap<String, String>,
+) {
+    update_status_keyed(app, state, connected, code, params);
 }
 
 /// Read messages off the websocket until either a pending-tx notification

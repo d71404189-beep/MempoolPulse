@@ -48,16 +48,13 @@ async fn stop_streaming(app: AppHandle, state: tauri::State<'_, AppState>) -> Re
     if let Some(handle) = guard.take() {
         handle.abort();
     }
-    mempool::emit_status(&app, &*state, false, "Stopped");
+    mempool::emit_status_keyed(&app, &*state, false, "status.stopped", Default::default());
     Ok(())
 }
 
 #[tauri::command]
 fn connection_status(state: tauri::State<'_, AppState>) -> ConnectionStatus {
-    ConnectionStatus {
-        connected: *state.connected.read(),
-        message: state.connection_message.read().clone(),
-    }
+    state.connection.read().clone()
 }
 
 #[tauri::command]
