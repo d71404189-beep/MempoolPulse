@@ -66,6 +66,14 @@ struct CoinGeckoUsd {
     usd: f64,
 }
 
+/// CoinGecko's public CDN now rejects requests without a descriptive
+/// User-Agent (HTTP 403). Set one explicitly on every call.
+const USER_AGENT: &str = concat!(
+    "MempoolPulse/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/d71404189-beep/MempoolPulse)",
+);
+
 async fn fetch_usd(coingecko_id: &str) -> anyhow::Result<f64> {
     let url = format!(
         "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=usd",
@@ -73,6 +81,8 @@ async fn fetch_usd(coingecko_id: &str) -> anyhow::Result<f64> {
     );
     let resp: HashMap<String, CoinGeckoUsd> = reqwest::Client::new()
         .get(&url)
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "application/json")
         .timeout(Duration::from_secs(8))
         .send()
         .await?
