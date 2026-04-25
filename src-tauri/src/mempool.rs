@@ -78,6 +78,14 @@ async fn run_with_reconnect(app: AppHandle, state: AppState) {
     }
 }
 
+/// How long to wait for the first pending-tx notification after an
+/// `alchemy_pendingTransactions` subscription is acknowledged. Some providers
+/// (e.g. publicnode) silently accept the subscribe call and return an id but
+/// never push notifications — if no notification arrives within this window
+/// we unsubscribe and fall back to the standard `newPendingTransactions`.
+const ALCHEMY_PROBE_SECS: u64 = 7;
+const SUBSCRIBE_ACK_SECS: u64 = 5;
+
 async fn run_once(app: &AppHandle, state: &AppState, ws_url: &str) -> anyhow::Result<()> {
     let request = ws_url
         .into_client_request()
@@ -95,21 +103,49 @@ async fn run_once(app: &AppHandle, state: &AppState, ws_url: &str) -> anyhow::Re
     });
     ws.send(Message::Text(alchemy_sub.to_string().into())).await?;
 
-    let mut alchemy_ok = false;
-    // Wait for the first response — either ack or error.
-    if let Some(msg) = ws.next().await {
-        let msg = msg?;
-        if let Message::Text(text) = &msg {
-            let v: Value = serde_json::from_str(text).unwrap_or(Value::Null);
-            if v.get("error").is_some() {
-                alchemy_ok = false;
-            } else if v.get("result").is_some() {
-                alchemy_ok = true;
+    let mut alchemy_sub_id: Option<String> = None;
+    // Wait for the first response — either ack or error — with a timeout so
+    // a provider that never replies doesn't wedge the worker forever.
+    if let Ok(Some(Ok(Message::Text(text)))) =
+        tokio::time::timeout(Duration::from_secs(SUBSCRIBE_ACK_SECS), ws.next()).await
+    {
+        let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        if let Some(id) = v.get("result").and_then(|r| r.as_str()) {
+            alchemy_sub_id = Some(id.to_string());
+        }
+    }
+
+    // If alchemy was acked, probe for an actual notification. Some providers
+    // ack the subscribe call but never push — the explicit fallback below
+    // covers that case. Any notification we receive during the probe is
+    // buffered and replayed into the main loop so we don't drop it.
+    let mut buffered: Option<Message> = None;
+    if let Some(sub_id) = &alchemy_sub_id {
+        match tokio::time::timeout(
+            Duration::from_secs(ALCHEMY_PROBE_SECS),
+            wait_for_pending_notification(&mut ws),
+        )
+        .await
+        {
+            Ok(Ok(Some(msg))) => {
+                buffered = Some(msg);
+            }
+            // Timeout, ws error, or ws closed before any notification arrived.
+            // Unsubscribe alchemy and fall back to the standard subscription.
+            _ => {
+                let unsub = json!({
+                    "jsonrpc": "2.0",
+                    "id": 99,
+                    "method": "eth_unsubscribe",
+                    "params": [sub_id]
+                });
+                ws.send(Message::Text(unsub.to_string().into())).await.ok();
+                alchemy_sub_id = None;
             }
         }
     }
 
-    if !alchemy_ok {
+    if alchemy_sub_id.is_none() {
         // Fallback: subscribe to plain newPendingTransactions (hashes only).
         let std_sub = json!({
             "jsonrpc": "2.0",
@@ -118,16 +154,25 @@ async fn run_once(app: &AppHandle, state: &AppState, ws_url: &str) -> anyhow::Re
             "params": ["newPendingTransactions"]
         });
         ws.send(Message::Text(std_sub.to_string().into())).await?;
-        if let Some(msg) = ws.next().await {
-            let msg = msg?;
-            if let Message::Text(text) = &msg {
-                let v: Value = serde_json::from_str(text).unwrap_or(Value::Null);
-                if v.get("error").is_some() {
+        match tokio::time::timeout(Duration::from_secs(SUBSCRIBE_ACK_SECS), ws.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+                if v.get("error").is_some() || v.get("result").is_none() {
                     return Err(anyhow!(
                         "Both alchemy_pendingTransactions and newPendingTransactions subscriptions were rejected"
                     ));
                 }
             }
+            Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {
+                return Err(anyhow!("WebSocket closed before subscription was acknowledged"));
+            }
+            Ok(Some(Err(e))) => return Err(anyhow!(e)),
+            Err(_) => {
+                return Err(anyhow!(
+                    "Timed out waiting for newPendingTransactions subscription ack"
+                ));
+            }
+            _ => {}
         }
     }
 
@@ -139,7 +184,12 @@ async fn run_once(app: &AppHandle, state: &AppState, ws_url: &str) -> anyhow::Re
         .build()
         .ok();
 
-    while let Some(msg) = ws.next().await {
+    loop {
+        let next = match buffered.take() {
+            Some(m) => Some(Ok(m)),
+            None => ws.next().await,
+        };
+        let Some(msg) = next else { break };
         if *state.shutdown.read() {
             return Ok(());
         }
@@ -329,6 +379,42 @@ fn update_status(app: &AppHandle, state: &AppState, connected: bool, msg: impl I
         EVENT_STATUS,
         serde_json::json!({ "connected": connected, "message": msg }),
     );
+}
+
+/// Emit a status update without going through the worker. Used by
+/// `stop_streaming` so the frontend status bar reflects the change immediately
+/// after the user clicks Stop.
+pub fn emit_status(app: &AppHandle, state: &AppState, connected: bool, msg: impl Into<String>) {
+    update_status(app, state, connected, msg);
+}
+
+/// Read messages off the websocket until either a pending-tx notification
+/// arrives (returned to caller for processing) or the stream ends. Pings are
+/// answered transparently. Subscription acks (top-level `result`, no `params`)
+/// are skipped.
+async fn wait_for_pending_notification(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) -> anyhow::Result<Option<Message>> {
+    while let Some(msg) = ws.next().await {
+        let msg = msg.map_err(|e| anyhow!(e))?;
+        match &msg {
+            Message::Text(text) => {
+                let v: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+                if v.get("params").and_then(|p| p.get("result")).is_some() {
+                    return Ok(Some(msg));
+                }
+                // Otherwise it's an ack or unrelated reply — keep waiting.
+            }
+            Message::Ping(p) => {
+                ws.send(Message::Pong(p.clone())).await.ok();
+            }
+            Message::Close(_) => return Ok(None),
+            _ => {}
+        }
+    }
+    Ok(None)
 }
 
 fn redact(url: &str) -> String {
