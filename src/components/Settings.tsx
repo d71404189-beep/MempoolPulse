@@ -1,15 +1,18 @@
 import { useState } from "react";
 import type { AppSettings, WatchEntry } from "../types";
+import { t, type Lang } from "../i18n";
 
 interface Props {
   settings: AppSettings;
   onSave: (next: AppSettings) => Promise<void>;
+  lang: Lang;
 }
 
-export default function Settings({ settings, onSave }: Props) {
+export default function Settings({ settings, onSave, lang }: Props) {
   const [draft, setDraft] = useState<AppSettings>(settings);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const tr = (k: Parameters<typeof t>[1]) => t(lang, k);
 
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
@@ -51,16 +54,30 @@ export default function Settings({ settings, onSave }: Props) {
 
   return (
     <div className="settings">
-      <h2>Settings</h2>
-      <p className="lead">
-        Bring your own RPC. MempoolPulse never proxies your traffic — your keys
-        and pending-tx data stay on this machine.
-      </p>
+      <h2>{tr("settings.title")}</h2>
+      <p className="lead">{tr("settings.lead")}</p>
 
       <div className="section">
-        <h3>RPC endpoints</h3>
+        <h3>{tr("settings.section.lang")}</h3>
         <div className="field">
-          <label>WebSocket URL</label>
+          <label>{tr("settings.lang.label")}</label>
+          <select
+            value={draft.language}
+            onChange={(e) =>
+              update("language", e.target.value as AppSettings["language"])
+            }
+          >
+            <option value="auto">{tr("settings.lang.auto")}</option>
+            <option value="en">{tr("settings.lang.en")}</option>
+            <option value="ru">{tr("settings.lang.ru")}</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="section">
+        <h3>{tr("settings.section.rpc")}</h3>
+        <div className="field">
+          <label>{tr("settings.field.ws")}</label>
           <input
             placeholder="wss://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
             value={draft.rpc_ws_url}
@@ -69,7 +86,7 @@ export default function Settings({ settings, onSave }: Props) {
           />
         </div>
         <div className="field">
-          <label>HTTPS URL (optional, used to enrich hash-only feeds)</label>
+          <label>{tr("settings.field.https")}</label>
           <input
             placeholder="https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
             value={draft.rpc_http_url}
@@ -80,10 +97,10 @@ export default function Settings({ settings, onSave }: Props) {
       </div>
 
       <div className="section">
-        <h3>Filters</h3>
+        <h3>{tr("settings.section.filters")}</h3>
         <div className="row">
           <div className="field">
-            <label>Min value (ETH)</label>
+            <label>{tr("settings.field.min_eth")}</label>
             <input
               type="number"
               min={0}
@@ -95,7 +112,7 @@ export default function Settings({ settings, onSave }: Props) {
             />
           </div>
           <div className="field">
-            <label>Min value (USD)</label>
+            <label>{tr("settings.field.min_usd")}</label>
             <input
               type="number"
               min={0}
@@ -107,7 +124,7 @@ export default function Settings({ settings, onSave }: Props) {
             />
           </div>
           <div className="field">
-            <label>Buffer size</label>
+            <label>{tr("settings.field.buffer")}</label>
             <input
               type="number"
               min={50}
@@ -121,7 +138,7 @@ export default function Settings({ settings, onSave }: Props) {
           </div>
         </div>
         <div className="field">
-          <label>Filter to contracts (one address per line)</label>
+          <label>{tr("settings.field.contracts")}</label>
           <textarea
             rows={3}
             value={draft.filters.to_contracts.join("\n")}
@@ -137,7 +154,7 @@ export default function Settings({ settings, onSave }: Props) {
           />
         </div>
         <div className="field">
-          <label>Function selectors (4-byte hex, one per line)</label>
+          <label>{tr("settings.field.selectors")}</label>
           <textarea
             rows={3}
             value={draft.filters.selectors.join("\n")}
@@ -155,17 +172,17 @@ export default function Settings({ settings, onSave }: Props) {
       </div>
 
       <div className="section">
-        <h3>Watchlist</h3>
+        <h3>{tr("settings.section.watchlist")}</h3>
         {draft.watchlist.map((w, i) => (
           <div key={i} className="watchlist-row">
             <input
-              placeholder="0xWalletAddress"
+              placeholder={tr("settings.watch.address")}
               value={w.address}
               onChange={(e) => updateWatch(i, { address: e.target.value })}
               spellCheck={false}
             />
             <input
-              placeholder="Label (e.g. Whale #1)"
+              placeholder={tr("settings.watch.label")}
               value={w.label}
               onChange={(e) => updateWatch(i, { label: e.target.value })}
             />
@@ -173,25 +190,25 @@ export default function Settings({ settings, onSave }: Props) {
               type="button"
               className="icon-btn"
               onClick={() => removeWatch(i)}
-              aria-label="Remove"
+              aria-label={tr("settings.watch.remove")}
             >
               ×
             </button>
           </div>
         ))}
         <button type="button" className="btn secondary" onClick={addWatch}>
-          + Add address
+          {tr("settings.watch.add")}
         </button>
       </div>
 
       <div className="row" style={{ justifyContent: "flex-end" }}>
         {savedAt && (
           <span className="muted" style={{ alignSelf: "center" }}>
-            Saved {new Date(savedAt).toLocaleTimeString()}
+            {tr("settings.saved_at")} {new Date(savedAt).toLocaleTimeString()}
           </span>
         )}
         <button className="btn" disabled={saving} onClick={save}>
-          {saving ? "Saving…" : "Save"}
+          {saving ? tr("settings.saving") : tr("settings.save")}
         </button>
       </div>
     </div>

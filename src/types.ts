@@ -33,6 +33,7 @@ export interface AppSettings {
   rpc_http_url: string;
   license_key: string;
   display_name: string;
+  language: "auto" | "en" | "ru";
   filters: Filters;
   watchlist: WatchEntry[];
 }

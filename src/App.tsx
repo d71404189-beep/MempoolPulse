@@ -11,6 +11,7 @@ import type {
   LicenseStatus,
   PendingTx,
 } from "./types";
+import { resolveLang, t } from "./i18n";
 import "./App.css";
 
 type Tab = "live" | "settings";
@@ -24,6 +25,9 @@ export default function App() {
     connected: false,
     message: "Idle",
   });
+
+  const lang = useMemo(() => resolveLang(settings?.language ?? "auto"), [settings?.language]);
+  const tr = (key: Parameters<typeof t>[1]) => t(lang, key);
 
   // Bootstrap on mount.
   useEffect(() => {
@@ -90,13 +94,13 @@ export default function App() {
     return (
       <div className="loading">
         <h1>MempoolPulse</h1>
-        <p>Loading…</p>
+        <p>{tr("app.loading")}</p>
       </div>
     );
   }
 
   if (!licensed) {
-    return <LicenseGate onActivated={handleLicensed} />;
+    return <LicenseGate onActivated={handleLicensed} lang={lang} />;
   }
 
   return (
@@ -111,17 +115,17 @@ export default function App() {
             className={tab === "live" ? "tab active" : "tab"}
             onClick={() => setTab("live")}
           >
-            Live feed
+            {tr("app.tab.live")}
           </button>
           <button
             className={tab === "settings" ? "tab active" : "tab"}
             onClick={() => setTab("settings")}
           >
-            Settings
+            {tr("app.tab.settings")}
           </button>
         </nav>
         <div className="stats">
-          <span>{headerStats.total} txs</span>
+          <span>{headerStats.total} {tr("app.stats.txs")}</span>
           <span>
             ≈ ${headerStats.totalUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}
           </span>
@@ -129,13 +133,18 @@ export default function App() {
       </header>
 
       <main className="main">
-        {tab === "live" && <LiveTable txs={txs} settings={settings} />}
+        {tab === "live" && <LiveTable txs={txs} settings={settings} lang={lang} />}
         {tab === "settings" && settings && (
-          <Settings settings={settings} onSave={handleSettingsSaved} />
+          <Settings settings={settings} onSave={handleSettingsSaved} lang={lang} />
         )}
       </main>
 
-      <StatusBar status={status} onRestart={() => invoke("start_streaming")} onStop={() => invoke("stop_streaming")} />
+      <StatusBar
+        status={status}
+        onRestart={() => invoke("start_streaming")}
+        onStop={() => invoke("stop_streaming")}
+        lang={lang}
+      />
     </div>
   );
 }
