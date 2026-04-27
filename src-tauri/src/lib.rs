@@ -42,13 +42,13 @@ async fn start_streaming(app: AppHandle, state: tauri::State<'_, AppState>) -> R
 }
 
 #[tauri::command]
-async fn stop_streaming(state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn stop_streaming(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     *state.shutdown.write() = true;
     let mut guard = state.worker.lock().await;
     if let Some(handle) = guard.take() {
         handle.abort();
     }
-    state.set_connection(false, "Stopped");
+    mempool::emit_status(&app, &*state, false, "Stopped");
     Ok(())
 }
 
