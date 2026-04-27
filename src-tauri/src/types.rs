@@ -31,7 +31,7 @@ pub struct PendingTx {
     pub seen_at: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     /// WebSocket RPC URL provided by the user (e.g. wss://eth-mainnet.g.alchemy.com/v2/<KEY>).
     pub rpc_ws_url: String,
@@ -41,10 +41,31 @@ pub struct AppSettings {
     pub license_key: String,
     /// Optional per-user nickname displayed in notifications.
     pub display_name: String,
+    /// UI language preference: "auto" (default, follows system locale), "en", or "ru".
+    #[serde(default = "default_language")]
+    pub language: String,
     /// Filters applied on the live feed.
     pub filters: Filters,
     /// List of watched addresses; matches highlight rows and trigger system notifications.
     pub watchlist: Vec<WatchEntry>,
+}
+
+fn default_language() -> String {
+    "auto".to_string()
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            rpc_ws_url: String::new(),
+            rpc_http_url: String::new(),
+            license_key: String::new(),
+            display_name: String::new(),
+            language: default_language(),
+            filters: Filters::default(),
+            watchlist: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

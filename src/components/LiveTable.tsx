@@ -1,13 +1,16 @@
 import { useMemo, useState } from "react";
 import type { AppSettings, PendingTx } from "../types";
+import { t, type Lang } from "../i18n";
 
 interface Props {
   txs: PendingTx[];
   settings: AppSettings | null;
+  lang: Lang;
 }
 
-export default function LiveTable({ txs, settings }: Props) {
+export default function LiveTable({ txs, settings, lang }: Props) {
   const [search, setSearch] = useState("");
+  const tr = (k: Parameters<typeof t>[1]) => t(lang, k);
 
   const watchSet = useMemo(() => {
     const set = new Set<string>();
@@ -31,11 +34,12 @@ export default function LiveTable({ txs, settings }: Props) {
   if (txs.length === 0) {
     return (
       <div className="empty">
-        <h3>Waiting for pending transactions…</h3>
+        <h3>{tr("live.empty.title")}</h3>
         <p>
-          Make sure your WebSocket RPC URL is set in Settings and that your
-          provider supports the <code>newPendingTransactions</code> or{" "}
-          <code>alchemy_pendingTransactions</code> subscription.
+          {tr("live.empty.body_prefix")}{" "}
+          <code>newPendingTransactions</code> {tr("live.empty.body_or")}{" "}
+          <code>alchemy_pendingTransactions</code>
+          {tr("live.empty.body_suffix")}
         </p>
       </div>
     );
@@ -45,23 +49,23 @@ export default function LiveTable({ txs, settings }: Props) {
     <div className="live">
       <div className="live-toolbar">
         <input
-          placeholder="Filter by hash, address, or method…"
+          placeholder={tr("live.search_placeholder")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <span className="muted">{filtered.length} matched</span>
+        <span className="muted">{filtered.length} {tr("live.matched")}</span>
       </div>
       <div className="table-scroll">
         <table className="tx-table">
           <thead>
             <tr>
-              <th>Hash</th>
-              <th>From</th>
-              <th>To</th>
-              <th>Value (ETH)</th>
-              <th>USD</th>
-              <th>Gas (gwei)</th>
-              <th>Method</th>
+              <th>{tr("live.col.hash")}</th>
+              <th>{tr("live.col.from")}</th>
+              <th>{tr("live.col.to")}</th>
+              <th>{tr("live.col.value_eth")}</th>
+              <th>{tr("live.col.usd")}</th>
+              <th>{tr("live.col.gas")}</th>
+              <th>{tr("live.col.method")}</th>
             </tr>
           </thead>
           <tbody>
@@ -76,13 +80,13 @@ export default function LiveTable({ txs, settings }: Props) {
                 >
                   <td className="mono">{shorten(tx.hash)}</td>
                   <td className="mono">{shorten(tx.from)}</td>
-                  <td className="mono">{tx.to ? shorten(tx.to) : <span className="muted">create</span>}</td>
+                  <td className="mono">{tx.to ? shorten(tx.to) : <span className="muted">{tr("live.create")}</span>}</td>
                   <td className="value-eth">{tx.value_eth.toFixed(4)}</td>
                   <td>{tx.value_usd != null ? `$${formatUsd(tx.value_usd)}` : <span className="muted">—</span>}</td>
                   <td>{tx.gas_gwei != null ? tx.gas_gwei.toFixed(1) : <span className="muted">—</span>}</td>
                   <td>
                     <span className={tx.label ? "" : "muted"}>
-                      {tx.label ?? "raw call"}
+                      {tx.label ?? tr("live.raw_call")}
                     </span>
                   </td>
                 </tr>
