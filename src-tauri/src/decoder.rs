@@ -76,13 +76,70 @@ pub fn decode(input_hex: &str) -> (Option<String>, Option<String>) {
         "0x3593564c" => (Some("Uniswap Universal Router: execute".into()), None),
         "0x24856bc3" => (Some("Uniswap Universal Router: execute (deadline)".into()), None),
 
+        // PancakeSwap (BNB Chain) — same router shape as Uniswap V2
+        "0xb6f9de95" => (Some("PancakeSwap V2: swapExactETHForTokensSupportingFeeOnTransferTokens".into()), None),
+        "0x791ac947" => (Some("PancakeSwap V2: swapExactTokensForETHSupportingFeeOnTransferTokens".into()), None),
+        "0x5c11d795" => (Some("PancakeSwap V2: swapExactTokensForTokensSupportingFeeOnTransferTokens".into()), None),
+
+        // 1inch Aggregation Router v5
+        "0x12aa3caf" => (Some("1inch v5: swap".into()), None),
+        "0x0502b1c5" => (Some("1inch v5: unoswap".into()), None),
+        "0xf78dc253" => (Some("1inch v5: unoswapTo".into()), None),
+        "0x84bd6d29" => (Some("1inch v5: clipperSwap".into()), None),
+        "0xe449022e" => (Some("1inch v5: uniswapV3Swap".into()), None),
+
+        // 0x v4 Exchange Proxy
+        "0x415565b0" => (Some("0x: transformERC20".into()), None),
+        "0xd9627aa4" => (Some("0x: sellToUniswap".into()), None),
+        "0xaa77476c" => (Some("0x: fillOtcOrder".into()), None),
+
+        // Curve pools (most common selectors)
+        "0x3df02124" => (Some("Curve: exchange".into()), None),
+        "0xa6417ed6" => (Some("Curve: exchange_underlying".into()), None),
+        "0x394747c5" => (Some("Curve: exchange (with min)".into()), None),
+
+        // Balancer V2 Vault
+        "0x52bbbe29" => (Some("Balancer V2: swap".into()), None),
+        "0x945bcec9" => (Some("Balancer V2: batchSwap".into()), None),
+        "0xb95cac28" => (Some("Balancer V2: joinPool".into()), None),
+        "0x8bdb3913" => (Some("Balancer V2: exitPool".into()), None),
+
+        // CowSwap
+        "0x13d79a0b" => (Some("CowSwap: settle".into()), None),
+
+        // OpenSea Seaport (NFT marketplace)
+        "0xfb0f3ee1" => (Some("OpenSea Seaport: fulfillBasicOrder".into()), None),
+        "0xb3a34c4c" => (Some("OpenSea Seaport: fulfillOrder".into()), None),
+        "0xe7acab24" => (Some("OpenSea Seaport: fulfillAdvancedOrder".into()), None),
+        "0xed98a574" => (Some("OpenSea Seaport: fulfillAvailableOrders".into()), None),
+        "0xa8174404" => (Some("OpenSea Seaport: matchOrders".into()), None),
+
+        // Blur (NFT marketplace)
+        "0x9a1fc3a7" => (Some("Blur: execute".into()), None),
+
+        // Aave V3 Pool
+        "0x617ba037" => (Some("Aave V3: supply".into()), None),
+        "0x69328dec" => (Some("Aave V3: withdraw".into()), None),
+        "0xa415bcad" => (Some("Aave V3: borrow".into()), None),
+        "0x573ade81" => (Some("Aave V3: repay".into()), None),
+
+        // Lido (ETH staking)
+        "0xa1903eab" => (Some("Lido: submit".into()), None),
+
+        // EigenLayer (restaking)
+        "0xeea9064b" => (Some("EigenLayer: depositIntoStrategy".into()), None),
+
+        // L2 native bridges
+        "0xb1a1a882" => (Some("Arbitrum Bridge: depositEth".into()), None),
+        "0xeeb8a8d3" => (Some("Optimism/Base Bridge: depositERC20".into()), None),
+
         // ERC20
         "0xa9059cbb" => (
             Some("ERC20: transfer".into()),
             decode_erc20_transfer(body),
         ),
         "0x23b872dd" => (
-            Some("ERC20: transferFrom".into()),
+            Some("ERC20/ERC721: transferFrom".into()),
             None,
         ),
         "0x095ea7b3" => (
@@ -90,15 +147,33 @@ pub fn decode(input_hex: &str) -> (Option<String>, Option<String>) {
             decode_erc20_approve(body),
         ),
 
-        // Common WETH
-        "0xd0e30db0" => (Some("WETH: deposit".into()), None),
-        "0x2e1a7d4d" => (Some("WETH: withdraw".into()), None),
+        // ERC721 / ERC1155 (NFTs)
+        "0x42842e0e" => (Some("ERC721: safeTransferFrom".into()), None),
+        "0xb88d4fde" => (Some("ERC721: safeTransferFrom (with data)".into()), None),
+        "0xa22cb465" => (Some("ERC721/1155: setApprovalForAll".into()), None),
+        "0xf242432a" => (Some("ERC1155: safeTransferFrom".into()), None),
+        "0x2eb2c2d6" => (Some("ERC1155: safeBatchTransferFrom".into()), None),
+
+        // Permit2 (Uniswap)
+        "0x2b67b570" => (Some("Permit2: permit".into()), None),
+        "0x36c78516" => (Some("Permit2: permitTransferFrom".into()), None),
+        "0xed3401cd" => (Some("Permit2: permitWitnessTransferFrom".into()), None),
+
+        // ERC20 permit (EIP-2612)
+        "0xd505accf" => (Some("ERC20 permit (EIP-2612)".into()), None),
+
+        // Common WETH / WBNB / WMATIC (same selector)
+        "0xd0e30db0" => (Some("WETH/WBNB: deposit".into()), None),
+        "0x2e1a7d4d" => (Some("WETH/WBNB: withdraw".into()), None),
 
         // Multicall
         "0xac9650d8" => (Some("Multicall".into()), None),
+        "0x5ae401dc" => (Some("Multicall (deadline)".into()), None),
+        "0x1f0464d1" => (Some("Multicall (value)".into()), None),
 
         // Safe / Account abstraction common
         "0x6a761202" => (Some("Gnosis Safe: execTransaction".into()), None),
+        "0x468721a7" => (Some("ERC4337 EntryPoint: handleOps".into()), None),
 
         _ => (None, None),
     }
@@ -279,5 +354,30 @@ mod tests {
         let (label, summary) = decode("0xdeadbeef");
         assert!(label.is_none());
         assert!(summary.is_none());
+    }
+
+    #[test]
+    fn extended_selectors_match_correctly() {
+        // 1inch v5 swap
+        assert!(decode("0x12aa3caf").0.unwrap().contains("1inch"));
+        // Curve exchange
+        assert!(decode("0x3df02124").0.unwrap().contains("Curve"));
+        // Balancer V2 swap
+        assert!(decode("0x52bbbe29").0.unwrap().contains("Balancer"));
+        // OpenSea Seaport fulfillBasicOrder
+        assert!(decode("0xfb0f3ee1").0.unwrap().contains("Seaport"));
+        // Aave V3 supply
+        assert!(decode("0x617ba037").0.unwrap().contains("Aave"));
+        // Permit2 permit
+        assert!(decode("0x2b67b570").0.unwrap().contains("Permit2"));
+        // ERC1155 safeTransferFrom
+        assert!(decode("0xf242432a").0.unwrap().contains("ERC1155"));
+    }
+
+    #[test]
+    fn case_insensitive_selector_matching() {
+        // Selectors arrive as lower-case from JSON-RPC, but mixed-case shouldn't break.
+        let (label, _) = decode("0xA9059CBB00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000064");
+        assert!(label.is_some());
     }
 }
