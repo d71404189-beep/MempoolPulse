@@ -6,8 +6,9 @@ Drop the headline + body straight into Gumroad's product editor.
 
 ## Headline
 
-**See whales before they trade. MempoolPulse shows you Ethereum's pending
-transactions in real-time — directly from your own RPC.**
+**See whales before they trade. MempoolPulse shows you pending transactions
+on Ethereum, Arbitrum, Base, and BNB Chain in real-time — directly from
+your own RPCs.**
 
 ## Subheadline
 
@@ -16,17 +17,21 @@ One-time payment. No subscription. No data leaves your machine.
 
 ## What you get
 
-- Live stream of pending Ethereum transactions, decoded into something
-  human-readable: Uniswap V2/V3 swaps, ERC20 transfers, approvals,
-  Universal Router executions, Gnosis Safe executions, and more.
-- Filter by minimum ETH value, USD value, contract address, or 4-byte
-  selector.
+- Live stream of pending transactions on **Ethereum, Arbitrum One, Base,
+  and BNB Chain** — toggle each chain independently, all in one window.
+- Decoded into something human-readable: Uniswap V2/V3 swaps, ERC20
+  transfers, approvals, Universal Router executions, Gnosis Safe
+  executions, and more.
+- Filter by minimum native value, USD value, contract address, or 4-byte
+  selector — applies across all enabled chains.
 - Watchlist of addresses — rows from those wallets are highlighted and
   always pass the filter, even if their value is below the threshold.
 - Search across hash / address / decoded label.
-- USD price column powered by CoinGecko (cached, no API key required).
-- Local-only settings: your RPC URL, watchlist, and filters live on your
-  machine. We don't operate any server.
+- USD price column powered by CoinGecko (cached, no API key required) —
+  per-chain pricing (ETH for L2s, BNB for BNB Chain).
+- Russian and English UI with auto-detection from your system locale.
+- Local-only settings: your RPC URLs, watchlist, and filters live on
+  your machine. We don't operate any server.
 
 ## Why not a website?
 
@@ -41,17 +46,18 @@ your machine.
 
 ## Bring your own RPC
 
-You'll need a free WebSocket RPC URL from any of these:
+You'll need a free WebSocket RPC URL per chain you want to monitor. Either:
 
-- [Alchemy](https://alchemy.com) — free tier supports
-  `alchemy_pendingTransactions` (full tx bodies)
-- [QuickNode](https://quicknode.com) — free tier supports
-  `newPendingTransactions`
-- [Infura](https://infura.io) — free tier supports
-  `newPendingTransactions`
+- Use the bundled defaults (publicnode.com — no signup, free, decent for
+  Ethereum/BSC/Base; Arbitrum sequencer rarely emits pendings on public
+  nodes regardless of provider).
+- Or paste your own from [Alchemy](https://alchemy.com), [QuickNode](https://quicknode.com),
+  or [Infura](https://infura.io) for higher throughput. Alchemy's free
+  tier supports `alchemy_pendingTransactions` (full tx bodies); the others
+  use `newPendingTransactions` (hashes, fetched on demand).
 
-Setup takes about 60 seconds. Paste the URL into the Settings tab and
-hit Save.
+Setup takes about 60 seconds per chain. Paste the URL into Settings →
+Chains and hit Save.
 
 ## Specs
 
@@ -82,12 +88,13 @@ Yes — point the WebSocket URL at any chain your provider exposes (Sepolia,
 Holesky, etc.).
 
 **Q: Does it support L2s?**
-Ethereum mainnet ships in v1.0. Arbitrum, Base, and BSC follow in v1.1
-(free update). Solana support is on the roadmap.
+v1.0 ships with **Ethereum, Arbitrum One, Base, and BNB Chain** out of
+the box. Solana is planned for a future update (free for license
+holders).
 
 **Q: Why does my screen sometimes go quiet?**
 Mempool throughput varies — a quiet block + your filters being aggressive
-will produce gaps. Lower the "Min value (ETH)" or clear the contract
+will produce gaps. Lower the "Min value (native)" or clear the contract
 filter to verify the stream is alive.
 
 **Q: I'm a market maker / trading firm, can I get a team license?**
