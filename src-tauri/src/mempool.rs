@@ -1,0 +1,351 @@
+//! Mempool subscription worker.
+//!
+//! Connects to a user-supplied JSON-RPC WebSocket (typically Alchemy / QuickNode
+//! / Infura on Ethereum mainnet) and streams pending transactions to the
+//! frontend as Tauri events. We try the richer `alchemy_pendingTransactions`
+//! subscription first (returns full tx bodies); on providers that don't support
+//! it, we fall back to `eth_subscribe newPendingTransactions` (hashes only) and
+//! enrich each tx with a follow-up `eth_getTransactionByHash` over HTTP.
+
+use crate::decoder;
+use crate::state::AppState;
+use crate::types::{Filters, PendingTx};
+use anyhow::{anyhow, Context};
+use chrono::Utc;
+use futures_util::{SinkExt, StreamExt};
+use serde_json::{json, Value};
+use std::time::Duration;
+use tauri::{AppHandle, Emitter};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::Message;
+
+const EVENT_PENDING: &str = "mempool://pending";
+const EVENT_STATUS: &str = "mempool://status";
+
+/// Spawn the worker task. Cancels any previously running worker first.
+pub async fn restart(app: AppHandle, state: AppState) {
+    {
+        let mut guard = state.worker.lock().await;
+        if let Some(handle) = guard.take() {
+            *state.shutdown.write() = true;
+            handle.abort();
+        }
+        *state.shutdown.write() = false;
+    }
+
+    let app_clone = app.clone();
+    let state_clone = state.clone();
+    let handle = tokio::spawn(async move {
+        run_with_reconnect(app_clone, state_clone).await;
+    });
+    *state.worker.lock().await = Some(handle);
+}
+
+async fn run_with_reconnect(app: AppHandle, state: AppState) {
+    let mut backoff = Duration::from_secs(2);
+    loop {
+        if *state.shutdown.read() {
+            return;
+        }
+
+        let url = { state.settings.read().rpc_ws_url.clone() };
+        if url.is_empty() {
+            update_status(&app, &state, false, "No RPC WebSocket URL configured.");
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            continue;
+        }
+
+        update_status(&app, &state, false, format!("Connecting to {}", redact(&url)));
+
+        match run_once(&app, &state, &url).await {
+            Ok(()) => {
+                // Stream ended cleanly (rare); reconnect with short delay.
+                update_status(&app, &state, false, "Connection closed by server.");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                backoff = Duration::from_secs(2);
+            }
+            Err(e) => {
+                update_status(
+                    &app,
+                    &state,
+                    false,
+                    format!("Disconnected: {}. Retrying in {}s.", e, backoff.as_secs()),
+                );
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(30));
+            }
+        }
+    }
+}
+
+async fn run_once(app: &AppHandle, state: &AppState, ws_url: &str) -> anyhow::Result<()> {
+    let request = ws_url
+        .into_client_request()
+        .with_context(|| format!("Invalid WebSocket URL: {}", ws_url))?;
+    let (mut ws, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .with_context(|| "WebSocket handshake failed")?;
+
+    // Try the richer Alchemy subscription first.
+    let alchemy_sub = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_subscribe",
+        "params": ["alchemy_pendingTransactions", { "hashesOnly": false }]
+    });
+    ws.send(Message::Text(alchemy_sub.to_string().into())).await?;
+
+    let mut alchemy_ok = false;
+    // Wait for the first response — either ack or error.
+    if let Some(msg) = ws.next().await {
+        let msg = msg?;
+        if let Message::Text(text) = &msg {
+            let v: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+            if v.get("error").is_some() {
+                alchemy_ok = false;
+            } else if v.get("result").is_some() {
+                alchemy_ok = true;
+            }
+        }
+    }
+
+    if !alchemy_ok {
+        // Fallback: subscribe to plain newPendingTransactions (hashes only).
+        let std_sub = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "eth_subscribe",
+            "params": ["newPendingTransactions"]
+        });
+        ws.send(Message::Text(std_sub.to_string().into())).await?;
+        if let Some(msg) = ws.next().await {
+            let msg = msg?;
+            if let Message::Text(text) = &msg {
+                let v: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+                if v.get("error").is_some() {
+                    return Err(anyhow!(
+                        "Both alchemy_pendingTransactions and newPendingTransactions subscriptions were rejected"
+                    ));
+                }
+            }
+        }
+    }
+
+    update_status(app, state, true, "Streaming pending transactions");
+
+    let http_url = { state.settings.read().rpc_http_url.clone() };
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .ok();
+
+    while let Some(msg) = ws.next().await {
+        if *state.shutdown.read() {
+            return Ok(());
+        }
+        let msg = match msg {
+            Ok(m) => m,
+            Err(e) => return Err(anyhow!(e)),
+        };
+        let text = match msg {
+            Message::Text(t) => t.to_string(),
+            Message::Ping(p) => {
+                ws.send(Message::Pong(p)).await.ok();
+                continue;
+            }
+            Message::Close(_) => return Ok(()),
+            _ => continue,
+        };
+
+        let value: Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let params = match value.get("params").and_then(|p| p.get("result")) {
+            Some(p) => p.clone(),
+            None => continue,
+        };
+
+        // Either a full tx object (alchemy) or a bare hash string (standard).
+        let pending_tx = if params.is_object() {
+            build_pending_tx(&params, state).await
+        } else if let Some(hash) = params.as_str() {
+            if let (Some(client), Some(http_url)) = (http_client.as_ref(), nonempty(&http_url)) {
+                if let Some(tx) = fetch_tx_by_hash(client, http_url, hash).await {
+                    build_pending_tx(&tx, state).await
+                } else {
+                    continue;
+                }
+            } else {
+                // We only have a hash and no HTTP RPC to enrich it. Emit a stub.
+                Some(stub_from_hash(hash))
+            }
+        } else {
+            None
+        };
+
+        let Some(tx) = pending_tx else { continue };
+        let filters = { state.settings.read().filters.clone() };
+        if !passes_filters(&tx, &filters, state) {
+            continue;
+        }
+        let _ = app.emit(EVENT_PENDING, &tx);
+    }
+    Ok(())
+}
+
+async fn fetch_tx_by_hash(
+    client: &reqwest::Client,
+    http_url: &str,
+    hash: &str,
+) -> Option<Value> {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_getTransactionByHash",
+        "params": [hash]
+    });
+    let resp = client.post(http_url).json(&body).send().await.ok()?;
+    let json: Value = resp.json().await.ok()?;
+    json.get("result").cloned().filter(|r| !r.is_null())
+}
+
+async fn build_pending_tx(raw: &Value, state: &AppState) -> Option<PendingTx> {
+    let hash = raw.get("hash")?.as_str()?.to_string();
+    let from = raw
+        .get("from")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let to = raw
+        .get("to")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_lowercase());
+    let value_hex = raw.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
+    let value_wei = decoder::hex_to_decimal_string(value_hex);
+    let value_wei_f = decoder::parse_hex_wei(value_hex).unwrap_or(0.0);
+    let value_eth = value_wei_f / 1e18;
+
+    let gas_gwei = raw
+        .get("maxFeePerGas")
+        .and_then(|v| v.as_str())
+        .or_else(|| raw.get("gasPrice").and_then(|v| v.as_str()))
+        .and_then(decoder::parse_hex_wei)
+        .map(|wei| wei / 1e9);
+    let gas_limit = raw
+        .get("gas")
+        .and_then(|v| v.as_str())
+        .map(decoder::hex_to_decimal_string);
+
+    let input = raw
+        .get("input")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0x")
+        .to_string();
+    let selector = if input.len() >= 10 {
+        Some(input[..10].to_lowercase())
+    } else {
+        None
+    };
+    let (label, summary) = decoder::decode(&input);
+
+    let eth_usd = state.prices.eth_usd().await;
+    let value_usd = if eth_usd > 0.0 {
+        Some(value_eth * eth_usd)
+    } else {
+        None
+    };
+
+    Some(PendingTx {
+        hash,
+        from,
+        to,
+        value_wei,
+        value_eth,
+        value_usd,
+        gas_gwei,
+        gas_limit,
+        input,
+        selector,
+        label,
+        summary,
+        seen_at: Utc::now().timestamp(),
+    })
+}
+
+fn stub_from_hash(hash: &str) -> PendingTx {
+    PendingTx {
+        hash: hash.to_string(),
+        from: String::new(),
+        to: None,
+        value_wei: "0".into(),
+        value_eth: 0.0,
+        value_usd: None,
+        gas_gwei: None,
+        gas_limit: None,
+        input: "0x".into(),
+        selector: None,
+        label: Some("Pending (hash only)".into()),
+        summary: Some("Add an HTTPS RPC URL in settings to decode full tx bodies.".into()),
+        seen_at: Utc::now().timestamp(),
+    }
+}
+
+fn passes_filters(tx: &PendingTx, filters: &Filters, state: &AppState) -> bool {
+    let watchlist = state.settings.read().watchlist.clone();
+    let watchlist_hit = watchlist.iter().any(|w| {
+        let a = w.address.to_lowercase();
+        tx.from == a || tx.to.as_deref().unwrap_or("") == a
+    });
+
+    let eth_ok = filters.min_value_eth == 0.0 || tx.value_eth >= filters.min_value_eth;
+    let usd_ok = filters.min_value_usd > 0.0
+        && tx.value_usd.map(|v| v >= filters.min_value_usd).unwrap_or(false);
+
+    if !watchlist_hit && !eth_ok && !usd_ok {
+        return false;
+    }
+
+    if !filters.to_contracts.is_empty() {
+        let to = tx.to.as_deref().unwrap_or("").to_lowercase();
+        if !filters.to_contracts.iter().any(|c| c.to_lowercase() == to) {
+            return false;
+        }
+    }
+    if !filters.selectors.is_empty() {
+        let sel = tx.selector.as_deref().unwrap_or("");
+        if !filters.selectors.iter().any(|s| s.to_lowercase() == sel) {
+            return false;
+        }
+    }
+    true
+}
+
+fn update_status(app: &AppHandle, state: &AppState, connected: bool, msg: impl Into<String>) {
+    let msg = msg.into();
+    state.set_connection(connected, msg.clone());
+    let _ = app.emit(
+        EVENT_STATUS,
+        serde_json::json!({ "connected": connected, "message": msg }),
+    );
+}
+
+fn redact(url: &str) -> String {
+    // Hide the API key portion of the URL when logging.
+    if let Some(idx) = url.rfind('/') {
+        let (head, tail) = url.split_at(idx + 1);
+        if tail.len() > 6 {
+            return format!("{}{}…{}", head, &tail[..3], &tail[tail.len() - 3..]);
+        }
+    }
+    url.to_string()
+}
+
+fn nonempty(s: &str) -> Option<&str> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}

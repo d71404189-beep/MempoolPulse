@@ -1,0 +1,397 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0d10;
+  --bg-elev: #11151b;
+  --bg-elev2: #181d25;
+  --border: #232a34;
+  --text: #e7ecf3;
+  --text-dim: #8a93a3;
+  --accent: #5cf2a4;
+  --accent-dim: #2c7a52;
+  --warn: #ffb454;
+  --danger: #ff5c7a;
+  --row-hit: rgba(92, 242, 164, 0.06);
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+.app {
+  display: grid;
+  grid-template-rows: 56px 1fr 28px;
+  height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.brand-dot {
+  width: 10px;
+  height: 10px;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 12px var(--accent);
+}
+
+.brand-name {
+  font-size: 15px;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.tab {
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab.active {
+  background: var(--bg-elev2);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.stats {
+  margin-left: auto;
+  display: flex;
+  gap: 16px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.main {
+  overflow: hidden;
+  position: relative;
+}
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elev);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.statusbar .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+.statusbar .dot.connected {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.statusbar .actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.statusbar button {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+.statusbar button:hover {
+  color: var(--text);
+}
+
+/* Live table */
+.live {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.live-toolbar {
+  display: flex;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+
+.live-toolbar input {
+  background: var(--bg-elev2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.table-scroll {
+  overflow: auto;
+}
+
+.tx-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.tx-table th,
+.tx-table td {
+  padding: 6px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.tx-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elev);
+  font-weight: 500;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tx-table tr:hover {
+  background: var(--bg-elev2);
+}
+
+.tx-table tr.watch-hit {
+  background: var(--row-hit);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.muted {
+  color: var(--text-dim);
+}
+
+.value-eth {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.empty {
+  padding: 64px 24px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.empty h3 {
+  margin: 0 0 8px;
+  color: var(--text);
+}
+
+/* Settings page */
+.settings {
+  height: 100%;
+  overflow: auto;
+  padding: 24px;
+  max-width: 880px;
+  margin: 0 auto;
+}
+
+.settings h2 {
+  margin: 0 0 4px;
+}
+
+.settings p.lead {
+  color: var(--text-dim);
+  margin-top: 0;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.field label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.field input,
+.field textarea {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.field input:focus,
+.field textarea:focus {
+  outline: 2px solid var(--accent-dim);
+  outline-offset: -1px;
+}
+
+.section {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+
+.section h3 {
+  margin: 0 0 12px;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.row .field {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.btn {
+  background: var(--accent);
+  color: #04140b;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn.secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.watchlist-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 32px;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.icon-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+.icon-btn:hover {
+  color: var(--danger);
+}
+
+/* License gate */
+.license-gate {
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.license-card {
+  width: 100%;
+  max-width: 460px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px;
+  text-align: center;
+}
+
+.license-card h1 {
+  margin: 0 0 8px;
+}
+
+.license-card p {
+  color: var(--text-dim);
+  margin: 0 0 24px;
+}
+
+.license-card input {
+  width: 100%;
+  text-align: center;
+  letter-spacing: 0.08em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg-elev2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+
+.license-card .error {
+  color: var(--danger);
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.loading {
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
