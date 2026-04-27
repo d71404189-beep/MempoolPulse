@@ -118,10 +118,11 @@ LANDING.md           Ready-to-paste Gumroad / Lemon Squeezy storefront copy
 ## Roadmap
 
 - **v1.0** — Ethereum, Arbitrum, Base, BNB Chain (released)
-- **v1.1** — Code signing (macOS Developer ID, Windows EV) + auto-updater
-- **v1.2** — Sound alerts on watchlist hits, custom alert rules, CSV/JSON export
-- **v1.3** — Tx replay sandbox via local fork (anvil)
-- **v1.4** — Solana support (Geyser-based pending stream)
+- **v1.1** — Expanded decoder (50+ selectors: 1inch, Curve, Balancer, Seaport, Aave, NFTs, Permit2…), CSV/JSON export of the live feed (released)
+- **v1.2** — Sound alerts on watchlist hits, custom alert rules
+- **v1.3** — Code signing (macOS Developer ID, Windows EV) + auto-updater
+- **v1.4** — Tx replay sandbox via local fork (anvil)
+- **v1.5** — Solana support (Geyser-based pending stream)
 
 ## License
 
