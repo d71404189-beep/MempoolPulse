@@ -24,6 +24,7 @@ export default function App() {
   const [status, setStatus] = useState<ConnectionStatus>({
     connected: false,
     message: "Idle",
+    code: "status.idle",
   });
 
   const lang = useMemo(() => resolveLang(settings?.language ?? "auto"), [settings?.language]);

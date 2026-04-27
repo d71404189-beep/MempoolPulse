@@ -99,5 +99,14 @@ pub struct LicenseStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionStatus {
     pub connected: bool,
+    /// English fallback message. Always populated for back-compat with the
+    /// original API; the frontend prefers `code`+`params` when present.
     pub message: String,
+    /// Localization key (e.g. "status.streaming"). When set, the frontend
+    /// renders the localized template and substitutes `params`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Substitution params for the localized template (e.g. {"url": "wss://…"}).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<std::collections::HashMap<String, String>>,
 }

@@ -40,7 +40,12 @@ export interface AppSettings {
 
 export interface ConnectionStatus {
   connected: boolean;
+  /** English fallback rendered by the Rust backend; used when `code` is absent. */
   message: string;
+  /** Optional localization key (e.g. "status.streaming") emitted by the backend. */
+  code?: string | null;
+  /** Optional substitution params for the localized template. */
+  params?: Record<string, string> | null;
 }
 
 export interface LicenseStatus {

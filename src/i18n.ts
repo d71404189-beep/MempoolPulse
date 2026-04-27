@@ -59,6 +59,12 @@ const messages = {
     "status.idle": "Idle",
     "status.reconnect": "Reconnect",
     "status.stop": "Stop",
+    "status.no_rpc": "No RPC WebSocket URL configured.",
+    "status.connecting": "Connecting to {url}",
+    "status.streaming": "Streaming pending transactions",
+    "status.closed": "Connection closed by server.",
+    "status.disconnected": "Disconnected: {err}. Retrying in {secs}s.",
+    "status.stopped": "Stopped",
   },
   ru: {
     "app.loading": "Загрузка…",
@@ -117,6 +123,12 @@ const messages = {
     "status.idle": "Простой",
     "status.reconnect": "Переподключить",
     "status.stop": "Стоп",
+    "status.no_rpc": "RPC WebSocket URL не указан.",
+    "status.connecting": "Подключение к {url}",
+    "status.streaming": "Поток pending-транзакций",
+    "status.closed": "Соединение закрыто сервером.",
+    "status.disconnected": "Отключено: {err}. Повтор через {secs}с.",
+    "status.stopped": "Остановлено",
   },
 } as const;
 
@@ -138,4 +150,19 @@ export function resolveLang(pref: LangPref | undefined | null): Lang {
 
 export function t(lang: Lang, key: MessageKey): string {
   return messages[lang][key] ?? messages.en[key] ?? key;
+}
+
+/** Render a localized status template, substituting {placeholders}. */
+export function formatStatus(
+  lang: Lang,
+  status: { code?: string | null; params?: Record<string, string> | null; message?: string },
+): string {
+  const code = status.code as MessageKey | undefined;
+  if (!code) return status.message ?? "";
+  const tpl = (messages[lang] as Record<string, string>)[code]
+    ?? (messages.en as Record<string, string>)[code]
+    ?? status.message
+    ?? code;
+  const params = status.params ?? {};
+  return tpl.replace(/\{(\w+)\}/g, (_, k) => params[k] ?? `{${k}}`);
 }

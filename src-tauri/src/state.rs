@@ -1,5 +1,5 @@
 use crate::prices::PriceFetcher;
-use crate::types::AppSettings;
+use crate::types::{AppSettings, ConnectionStatus};
 use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,9 +17,10 @@ pub struct AppState {
     pub worker: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     /// Cancellation flag observed by the worker loop.
     pub shutdown: Arc<RwLock<bool>>,
-    /// Last known connection status, surfaced to the UI on demand.
-    pub connection_message: Arc<RwLock<String>>,
-    pub connected: Arc<RwLock<bool>>,
+    /// Last known connection status, surfaced to the UI on demand. Stores
+    /// both an English fallback message and a localization `code`+`params`
+    /// pair so the frontend can render in the user's language.
+    pub connection: Arc<RwLock<ConnectionStatus>>,
 }
 
 impl AppState {
@@ -31,8 +32,12 @@ impl AppState {
             prices: PriceFetcher::new(),
             worker: Arc::new(Mutex::new(None)),
             shutdown: Arc::new(RwLock::new(false)),
-            connection_message: Arc::new(RwLock::new("Idle".into())),
-            connected: Arc::new(RwLock::new(false)),
+            connection: Arc::new(RwLock::new(ConnectionStatus {
+                connected: false,
+                message: "Idle".into(),
+                code: Some("status.idle".into()),
+                params: None,
+            })),
         }
     }
 
@@ -46,9 +51,8 @@ impl AppState {
         Ok(())
     }
 
-    pub fn set_connection(&self, connected: bool, message: impl Into<String>) {
-        *self.connected.write() = connected;
-        *self.connection_message.write() = message.into();
+    pub fn set_connection(&self, status: ConnectionStatus) {
+        *self.connection.write() = status;
     }
 }
 
