@@ -85,7 +85,11 @@ jobs:
       - run: npm ci
       - name: Tauri build
         env:
-          GUMROAD_PRODUCT_PERMALINK: ${{ vars.GUMROAD_PRODUCT_PERMALINK || 'mempoolpulse' }}
+          # When `vars.GUMROAD_PRODUCT_PERMALINK` is unset, this env var is an
+          # empty string, which makes the license gate accept any non-empty key.
+          # Set the repo variable once you list the product on Gumroad to enable
+          # real license validation.
+          GUMROAD_PRODUCT_PERMALINK: ${{ vars.GUMROAD_PRODUCT_PERMALINK }}
         run: npx tauri build --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
