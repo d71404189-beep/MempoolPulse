@@ -23,9 +23,11 @@ async fn save_settings(
 ) -> Result<(), String> {
     let needs_restart = {
         let mut current = state.settings.write();
-        let restart =
-            current.rpc_ws_url != new_settings.rpc_ws_url || current.rpc_http_url != new_settings.rpc_http_url;
+        // Restart workers if any chain config changed (URL, enabled flag, etc.).
+        let restart = serde_json::to_value(&current.chains).ok()
+            != serde_json::to_value(&new_settings.chains).ok();
         *current = new_settings;
+        current.normalize();
         restart
     };
     state.save_settings().map_err(|e| e.to_string())?;
@@ -42,22 +44,19 @@ async fn start_streaming(app: AppHandle, state: tauri::State<'_, AppState>) -> R
 }
 
 #[tauri::command]
-async fn stop_streaming(state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn stop_streaming(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     *state.shutdown.write() = true;
-    let mut guard = state.worker.lock().await;
-    if let Some(handle) = guard.take() {
+    let mut guard = state.workers.lock().await;
+    for (_, handle) in guard.drain() {
         handle.abort();
     }
-    state.set_connection(false, "Stopped");
+    mempool::emit_all_stopped(&app, &*state);
     Ok(())
 }
 
 #[tauri::command]
-fn connection_status(state: tauri::State<'_, AppState>) -> ConnectionStatus {
-    ConnectionStatus {
-        connected: *state.connected.read(),
-        message: state.connection_message.read().clone(),
-    }
+fn connection_status(state: tauri::State<'_, AppState>) -> Vec<ConnectionStatus> {
+    state.snapshot_connections()
 }
 
 #[tauri::command]

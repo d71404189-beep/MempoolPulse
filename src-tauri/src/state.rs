@@ -1,6 +1,7 @@
 use crate::prices::PriceFetcher;
-use crate::types::AppSettings;
+use crate::types::{AppSettings, ConnectionStatus};
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -11,28 +12,42 @@ pub struct AppState {
     pub settings: Arc<RwLock<AppSettings>>,
     pub settings_path: Arc<PathBuf>,
     pub prices: PriceFetcher,
-    /// Holds the JoinHandle of the running mempool worker so we can cancel it
-    /// when settings change. `Mutex` (async) because we need to await on
-    /// shutdown signalling cleanly.
-    pub worker: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    /// Cancellation flag observed by the worker loop.
+    /// One JoinHandle per running per-chain worker, keyed by chain id.
+    /// `Mutex` (async) because we need to await on shutdown signalling cleanly.
+    pub workers: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    /// Cancellation flag observed by all worker loops.
     pub shutdown: Arc<RwLock<bool>>,
-    /// Last known connection status, surfaced to the UI on demand.
-    pub connection_message: Arc<RwLock<String>>,
-    pub connected: Arc<RwLock<bool>>,
+    /// Last known connection status per chain. Surfaced to the UI on demand
+    /// and updated on every `mempool://status` emission.
+    pub connection: Arc<RwLock<HashMap<String, ConnectionStatus>>>,
 }
 
 impl AppState {
     pub fn new(settings_path: PathBuf) -> Self {
         let settings = load_settings(&settings_path);
+        let initial_conn = settings
+            .chains
+            .iter()
+            .map(|c| {
+                (
+                    c.id.clone(),
+                    ConnectionStatus {
+                        chain: c.id.clone(),
+                        connected: false,
+                        message: "Idle".into(),
+                        code: Some("status.idle".into()),
+                        params: None,
+                    },
+                )
+            })
+            .collect();
         Self {
             settings: Arc::new(RwLock::new(settings)),
             settings_path: Arc::new(settings_path),
             prices: PriceFetcher::new(),
-            worker: Arc::new(Mutex::new(None)),
+            workers: Arc::new(Mutex::new(HashMap::new())),
             shutdown: Arc::new(RwLock::new(false)),
-            connection_message: Arc::new(RwLock::new("Idle".into())),
-            connected: Arc::new(RwLock::new(false)),
+            connection: Arc::new(RwLock::new(initial_conn)),
         }
     }
 
@@ -46,17 +61,22 @@ impl AppState {
         Ok(())
     }
 
-    pub fn set_connection(&self, connected: bool, message: impl Into<String>) {
-        *self.connected.write() = connected;
-        *self.connection_message.write() = message.into();
+    pub fn set_connection(&self, status: ConnectionStatus) {
+        self.connection.write().insert(status.chain.clone(), status);
+    }
+
+    pub fn snapshot_connections(&self) -> Vec<ConnectionStatus> {
+        self.connection.read().values().cloned().collect()
     }
 }
 
 fn load_settings(path: &PathBuf) -> AppSettings {
-    match std::fs::read_to_string(path) {
+    let mut s = match std::fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|_| default_settings()),
         Err(_) => default_settings(),
-    }
+    };
+    s.normalize();
+    s
 }
 
 fn default_settings() -> AppSettings {

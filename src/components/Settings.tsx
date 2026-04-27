@@ -1,6 +1,45 @@
 import { useState } from "react";
-import type { AppSettings, WatchEntry } from "../types";
+import type { AppSettings, ChainConfig, WatchEntry } from "../types";
 import { t, type Lang } from "../i18n";
+
+const DEFAULT_CHAINS: ChainConfig[] = [
+  {
+    id: "ethereum",
+    name: "Ethereum",
+    native_symbol: "ETH",
+    coingecko_id: "ethereum",
+    rpc_ws_url: "wss://ethereum-rpc.publicnode.com",
+    rpc_http_url: "",
+    enabled: true,
+  },
+  {
+    id: "arbitrum",
+    name: "Arbitrum One",
+    native_symbol: "ETH",
+    coingecko_id: "ethereum",
+    rpc_ws_url: "wss://arbitrum-one-rpc.publicnode.com",
+    rpc_http_url: "",
+    enabled: false,
+  },
+  {
+    id: "base",
+    name: "Base",
+    native_symbol: "ETH",
+    coingecko_id: "ethereum",
+    rpc_ws_url: "wss://base-rpc.publicnode.com",
+    rpc_http_url: "",
+    enabled: false,
+  },
+  {
+    id: "bsc",
+    name: "BNB Chain",
+    native_symbol: "BNB",
+    coingecko_id: "binancecoin",
+    rpc_ws_url: "wss://bsc-rpc.publicnode.com",
+    rpc_http_url: "",
+    enabled: false,
+  },
+];
 
 interface Props {
   settings: AppSettings;
@@ -21,6 +60,12 @@ export default function Settings({ settings, onSave, lang }: Props) {
     key: K,
     value: AppSettings["filters"][K],
   ) => setDraft((d) => ({ ...d, filters: { ...d.filters, [key]: value } }));
+
+  const updateChain = (i: number, patch: Partial<ChainConfig>) =>
+    setDraft((d) => ({
+      ...d,
+      chains: d.chains.map((c, idx) => (idx === i ? { ...c, ...patch } : c)),
+    }));
 
   const addWatch = () =>
     setDraft((d) => ({
@@ -75,24 +120,53 @@ export default function Settings({ settings, onSave, lang }: Props) {
       </div>
 
       <div className="section">
-        <h3>{tr("settings.section.rpc")}</h3>
-        <div className="field">
-          <label>{tr("settings.field.ws")}</label>
-          <input
-            placeholder="wss://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
-            value={draft.rpc_ws_url}
-            onChange={(e) => update("rpc_ws_url", e.target.value)}
-            spellCheck={false}
-          />
+        <h3>{tr("settings.section.chains")}</h3>
+        <p className="lead">{tr("settings.chains.lead")}</p>
+        <div className="chains">
+          {draft.chains.map((c, i) => (
+            <div key={c.id} className="chain-row">
+              <div className="chain-head">
+                <label className="chain-toggle">
+                  <input
+                    type="checkbox"
+                    checked={c.enabled}
+                    onChange={(e) => updateChain(i, { enabled: e.target.checked })}
+                  />
+                  <span className="chain-name">{c.name}</span>
+                </label>
+                <span className="chain-symbol">{c.native_symbol}</span>
+              </div>
+              <div className="field">
+                <label>{tr("settings.chain.ws")}</label>
+                <input
+                  placeholder="wss://…"
+                  value={c.rpc_ws_url}
+                  onChange={(e) => updateChain(i, { rpc_ws_url: e.target.value })}
+                  spellCheck={false}
+                />
+              </div>
+              <div className="field">
+                <label>{tr("settings.chain.https")}</label>
+                <input
+                  placeholder="https://…"
+                  value={c.rpc_http_url}
+                  onChange={(e) => updateChain(i, { rpc_http_url: e.target.value })}
+                  spellCheck={false}
+                />
+              </div>
+            </div>
+          ))}
         </div>
-        <div className="field">
-          <label>{tr("settings.field.https")}</label>
-          <input
-            placeholder="https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
-            value={draft.rpc_http_url}
-            onChange={(e) => update("rpc_http_url", e.target.value)}
-            spellCheck={false}
-          />
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 8 }}>
+          <button
+            type="button"
+            className="btn secondary"
+            onClick={() =>
+              setDraft((d) => ({ ...d, chains: DEFAULT_CHAINS.map((c) => ({ ...c })) }))
+            }
+          >
+            {tr("settings.chains.reset")}
+          </button>
         </div>
       </div>
 

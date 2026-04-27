@@ -21,10 +21,12 @@ const messages = {
     "live.empty.body_suffix": "subscription.",
     "live.search_placeholder": "Filter by hash, address, or method…",
     "live.matched": "matched",
+    "live.col.chain": "Chain",
     "live.col.hash": "Hash",
     "live.col.from": "From",
     "live.col.to": "To",
     "live.col.value_eth": "Value (ETH)",
+    "live.col.value": "Value",
     "live.col.usd": "USD",
     "live.col.gas": "Gas (gwei)",
     "live.col.method": "Method",
@@ -36,6 +38,14 @@ const messages = {
     "settings.section.rpc": "RPC endpoints",
     "settings.field.ws": "WebSocket URL",
     "settings.field.https": "HTTPS URL (optional, used to enrich hash-only feeds)",
+    "settings.section.chains": "Chains",
+    "settings.chains.lead": "Enable a chain to start streaming. Each chain uses its own RPC; the WebSocket URL is required, HTTPS is optional but recommended for hash-only providers.",
+    "settings.chain.enabled": "Enabled",
+    "settings.chain.name": "Name",
+    "settings.chain.symbol": "Native",
+    "settings.chain.ws": "WebSocket URL",
+    "settings.chain.https": "HTTPS URL (optional)",
+    "settings.chains.reset": "Reset to defaults",
     "settings.section.filters": "Filters",
     "settings.field.min_eth": "Min value (ETH)",
     "settings.field.min_usd": "Min value (USD)",
@@ -59,6 +69,16 @@ const messages = {
     "status.idle": "Idle",
     "status.reconnect": "Reconnect",
     "status.stop": "Stop",
+    "status.no_rpc": "No RPC WebSocket URL configured.",
+    "status.connecting": "Connecting to {url}",
+    "status.streaming": "Streaming pending transactions",
+    "status.closed": "Connection closed by server.",
+    "status.disconnected": "Disconnected: {err}. Retrying in {secs}s.",
+    "status.stopped": "Stopped",
+    "status.aggregate": "Streaming on {connected}/{total} chains",
+    "status.aggregate_one": "{detail}",
+    "status.aggregate_none": "All chains stopped",
+    "status.no_chains": "No chains enabled. Open Settings to enable one.",
   },
   ru: {
     "app.loading": "Загрузка…",
@@ -79,10 +99,12 @@ const messages = {
     "live.empty.body_suffix": ".",
     "live.search_placeholder": "Поиск по hash, адресу или методу…",
     "live.matched": "найдено",
+    "live.col.chain": "Сеть",
     "live.col.hash": "Hash",
     "live.col.from": "Откуда",
     "live.col.to": "Куда",
     "live.col.value_eth": "Сумма (ETH)",
+    "live.col.value": "Сумма",
     "live.col.usd": "USD",
     "live.col.gas": "Gas (gwei)",
     "live.col.method": "Метод",
@@ -94,6 +116,14 @@ const messages = {
     "settings.section.rpc": "RPC-эндпоинты",
     "settings.field.ws": "WebSocket URL",
     "settings.field.https": "HTTPS URL (опционально, для обогащения hash-only потоков)",
+    "settings.section.chains": "Сети",
+    "settings.chains.lead": "Включите сеть, чтобы начать стрим. У каждой сети свой RPC; WebSocket URL обязателен, HTTPS — опциональный, нужен для hash-only провайдеров.",
+    "settings.chain.enabled": "Включена",
+    "settings.chain.name": "Название",
+    "settings.chain.symbol": "Монета",
+    "settings.chain.ws": "WebSocket URL",
+    "settings.chain.https": "HTTPS URL (опционально)",
+    "settings.chains.reset": "Сбросить к значениям по умолчанию",
     "settings.section.filters": "Фильтры",
     "settings.field.min_eth": "Мин. сумма (ETH)",
     "settings.field.min_usd": "Мин. сумма (USD)",
@@ -117,6 +147,16 @@ const messages = {
     "status.idle": "Простой",
     "status.reconnect": "Переподключить",
     "status.stop": "Стоп",
+    "status.no_rpc": "RPC WebSocket URL не указан.",
+    "status.connecting": "Подключение к {url}",
+    "status.streaming": "Поток pending-транзакций",
+    "status.closed": "Соединение закрыто сервером.",
+    "status.disconnected": "Отключено: {err}. Повтор через {secs}с.",
+    "status.stopped": "Остановлено",
+    "status.aggregate": "Стрим в {connected}/{total} сетях",
+    "status.aggregate_one": "{detail}",
+    "status.aggregate_none": "Все сети остановлены",
+    "status.no_chains": "Ни одна сеть не включена. Откройте Настройки.",
   },
 } as const;
 
@@ -138,4 +178,19 @@ export function resolveLang(pref: LangPref | undefined | null): Lang {
 
 export function t(lang: Lang, key: MessageKey): string {
   return messages[lang][key] ?? messages.en[key] ?? key;
+}
+
+/** Render a localized status template, substituting {placeholders}. */
+export function formatStatus(
+  lang: Lang,
+  status: { code?: string | null; params?: Record<string, string> | null; message?: string },
+): string {
+  const code = status.code as MessageKey | undefined;
+  if (!code) return status.message ?? "";
+  const tpl = (messages[lang] as Record<string, string>)[code]
+    ?? (messages.en as Record<string, string>)[code]
+    ?? status.message
+    ?? code;
+  const params = status.params ?? {};
+  return tpl.replace(/\{(\w+)\}/g, (_, k) => params[k] ?? `{${k}}`);
 }

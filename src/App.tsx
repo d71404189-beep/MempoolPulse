@@ -21,10 +21,8 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [tab, setTab] = useState<Tab>("live");
   const [txs, setTxs] = useState<PendingTx[]>([]);
-  const [status, setStatus] = useState<ConnectionStatus>({
-    connected: false,
-    message: "Idle",
-  });
+  // Per-chain status keyed by chain id. Replaces the v1.0 single ConnectionStatus.
+  const [statusMap, setStatusMap] = useState<Record<string, ConnectionStatus>>({});
 
   const lang = useMemo(() => resolveLang(settings?.language ?? "auto"), [settings?.language]);
   const tr = (key: Parameters<typeof t>[1]) => t(lang, key);
@@ -36,15 +34,16 @@ export default function App() {
       setLicensed(license.valid);
       const s: AppSettings = await invoke("get_settings");
       setSettings(s);
-      const conn: ConnectionStatus = await invoke("connection_status");
-      setStatus(conn);
-      if (license.valid && s.rpc_ws_url) {
+      const conns: ConnectionStatus[] = await invoke("connection_status");
+      setStatusMap(toMap(conns));
+      const hasEnabled = s.chains.some((c) => c.enabled && c.rpc_ws_url);
+      if (license.valid && hasEnabled) {
         await invoke("start_streaming");
       }
     })();
   }, []);
 
-  // Stream pending transactions from the Rust worker.
+  // Stream pending transactions from the Rust workers.
   useEffect(() => {
     if (!settings) return;
     const cap = Math.max(50, settings.filters.buffer_size || 500);
@@ -59,7 +58,10 @@ export default function App() {
 
     const unlistenStatus = listen<ConnectionStatus>(
       "mempool://status",
-      (event) => setStatus(event.payload),
+      (event) => {
+        const s = event.payload;
+        setStatusMap((prev) => ({ ...prev, [s.chain || "_"]: s }));
+      },
     );
 
     return () => {
@@ -71,12 +73,16 @@ export default function App() {
   const handleSettingsSaved = async (next: AppSettings) => {
     await invoke("save_settings", { newSettings: next });
     setSettings(next);
+    // Refresh the status snapshot — the Rust backend reset chains it disabled
+    // to "idle" and restarted enabled chains, so the in-memory map can be stale.
+    const conns: ConnectionStatus[] = await invoke("connection_status");
+    setStatusMap(toMap(conns));
   };
 
   const handleLicensed = async (next: AppSettings) => {
     setLicensed(true);
     setSettings(next);
-    if (next.rpc_ws_url) {
+    if (next.chains.some((c) => c.enabled && c.rpc_ws_url)) {
       await invoke("start_streaming");
     }
   };
@@ -89,6 +95,8 @@ export default function App() {
     );
     return { total, totalUsd };
   }, [txs]);
+
+  const statuses = useMemo(() => Object.values(statusMap), [statusMap]);
 
   if (licensed === null) {
     return (
@@ -140,11 +148,20 @@ export default function App() {
       </main>
 
       <StatusBar
-        status={status}
+        statuses={statuses}
+        settings={settings}
         onRestart={() => invoke("start_streaming")}
         onStop={() => invoke("stop_streaming")}
         lang={lang}
       />
     </div>
   );
+}
+
+function toMap(conns: ConnectionStatus[]): Record<string, ConnectionStatus> {
+  const map: Record<string, ConnectionStatus> = {};
+  for (const c of conns) {
+    map[c.chain || "_"] = c;
+  }
+  return map;
 }
