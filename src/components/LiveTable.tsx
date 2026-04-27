@@ -59,10 +59,11 @@ export default function LiveTable({ txs, settings, lang }: Props) {
         <table className="tx-table">
           <thead>
             <tr>
+              <th>{tr("live.col.chain")}</th>
               <th>{tr("live.col.hash")}</th>
               <th>{tr("live.col.from")}</th>
               <th>{tr("live.col.to")}</th>
-              <th>{tr("live.col.value_eth")}</th>
+              <th>{tr("live.col.value")}</th>
               <th>{tr("live.col.usd")}</th>
               <th>{tr("live.col.gas")}</th>
               <th>{tr("live.col.method")}</th>
@@ -74,14 +75,17 @@ export default function LiveTable({ txs, settings, lang }: Props) {
                 watchSet.has(tx.from) || (tx.to && watchSet.has(tx.to));
               return (
                 <tr
-                  key={tx.hash}
+                  key={`${tx.chain}:${tx.hash}`}
                   className={watchHit ? "watch-hit" : ""}
                   title={tx.summary ?? undefined}
                 >
+                  <td><span className="chain-badge">{chainLabel(tx, settings)}</span></td>
                   <td className="mono">{shorten(tx.hash)}</td>
                   <td className="mono">{shorten(tx.from)}</td>
                   <td className="mono">{tx.to ? shorten(tx.to) : <span className="muted">{tr("live.create")}</span>}</td>
-                  <td className="value-eth">{tx.value_eth.toFixed(4)}</td>
+                  <td className="value-eth">
+                    {tx.value_native.toFixed(4)} <span className="muted">{tx.native_symbol || "ETH"}</span>
+                  </td>
                   <td>{tx.value_usd != null ? `$${formatUsd(tx.value_usd)}` : <span className="muted">—</span>}</td>
                   <td>{tx.gas_gwei != null ? tx.gas_gwei.toFixed(1) : <span className="muted">—</span>}</td>
                   <td>
@@ -102,6 +106,13 @@ export default function LiveTable({ txs, settings, lang }: Props) {
 function shorten(addr: string) {
   if (addr.length < 12) return addr;
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
+function chainLabel(tx: PendingTx, settings: AppSettings | null): string {
+  const known = settings?.chains.find((c) => c.id === tx.chain);
+  if (known) return known.name;
+  if (!tx.chain) return "—";
+  return tx.chain;
 }
 
 function formatUsd(n: number) {
