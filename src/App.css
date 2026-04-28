@@ -676,3 +676,51 @@ textarea {
   margin-top: 4px;
   display: block;
 }
+
+/* ---------- v1.5: simulate-tx modal ---------- */
+.btn-mini {
+  background: rgba(64, 144, 255, 0.12);
+  border: 1px solid rgba(64, 144, 255, 0.4);
+  color: #cfe1ff;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-mini:hover { background: rgba(64, 144, 255, 0.24); }
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center; z-index: 2000;
+  backdrop-filter: blur(4px);
+}
+.modal {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 20px; min-width: 480px; max-width: 720px; max-height: 80vh;
+  overflow-y: auto; color: #e6edf3;
+}
+.sim-modal { width: 600px; }
+.sim-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.sim-head h3 { margin: 0; }
+.modal-close {
+  background: none; border: none; color: #8b949e; font-size: 1.4rem; cursor: pointer; padding: 0 4px;
+}
+.modal-close:hover { color: #e6edf3; }
+.sim-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+.sim-meta code { font-size: 0.78rem; word-break: break-all; }
+.sim-body { padding: 8px 0; min-height: 100px; }
+.sim-bar { background: #21262d; border-radius: 4px; height: 8px; overflow: hidden; margin: 8px 0; }
+.sim-bar-fill { background: linear-gradient(90deg, #4090ff, #79b8ff); height: 100%; transition: width 200ms; }
+.sim-status { font-size: 1.1rem; font-weight: 600; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; }
+.sim-status.ok { background: rgba(46, 160, 67, 0.18); color: #7ee787; border: 1px solid rgba(46, 160, 67, 0.4); }
+.sim-status.fail { background: rgba(248, 81, 73, 0.18); color: #ff7b72; border: 1px solid rgba(248, 81, 73, 0.4); }
+.sim-grid { display: grid; grid-template-columns: max-content 1fr; column-gap: 16px; row-gap: 4px; margin: 0 0 16px; }
+.sim-grid dt { color: #8b949e; }
+.sim-grid dd { margin: 0; font-family: ui-monospace, monospace; }
+.sim-transfers h4 { margin: 0 0 8px; font-size: 0.95rem; }
+.sim-transfers ul { list-style: none; padding: 0; margin: 0; }
+.sim-transfers li { padding: 4px 0; border-bottom: 1px solid #21262d; font-size: 0.85rem; }
+.sim-transfers li:last-child { border-bottom: none; }
+.sim-err-msg { background: #21262d; padding: 8px; border-radius: 4px; white-space: pre-wrap; word-break: break-word; font-size: 0.78rem; max-height: 200px; overflow-y: auto; }
+.sim-foot { margin-top: 12px; display: flex; justify-content: flex-end; }
+.small { font-size: 0.78rem; }

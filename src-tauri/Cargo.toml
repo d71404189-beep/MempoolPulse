@@ -1,7 +1,7 @@
 [package]
 name = "mempoolpulse"
-version = "1.4.0"
-description = "Real-time multi-chain mempool monitor (Ethereum, Arbitrum, Base, BNB Chain, Polygon, Optimism, Avalanche) for spotting whale transactions before confirmation."
+version = "1.5.0"
+description = "Real-time multi-chain mempool monitor (Ethereum, Arbitrum, Base, BNB Chain, Polygon, Optimism, Avalanche) with anvil-based pre-confirmation tx simulation."
 authors = ["MempoolPulse"]
 edition = "2021"
 
@@ -17,10 +17,10 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "process", "io-util"] }
 tokio-tungstenite = { version = "0.26", features = ["native-tls", "url"] }
 futures-util = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 anyhow = "1"
 thiserror = "2"
 hex = "0.4"
@@ -28,6 +28,10 @@ chrono = { version = "0.4", features = ["serde"] }
 parking_lot = "0.12"
 url = "2.5"
 once_cell = "1"
+# Anvil bundle download / extraction for the v1.5 simulate-tx feature.
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [profile.release]
 panic = "abort"
