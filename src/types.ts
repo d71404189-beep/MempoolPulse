@@ -44,6 +44,24 @@ export interface ChainConfig {
   enabled: boolean;
 }
 
+export type AlertSound = "ping" | "chime" | "bell" | "siren";
+
+export interface AlertRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** Chain ids to match (empty = any chain). */
+  chains: string[];
+  /** Minimum USD value of the tx (null = any). */
+  min_value_usd: number | null;
+  /** Case-insensitive substring of `tx.label` (null/empty = any). */
+  label_contains: string | null;
+  /** Only fire if `from` or `to` is in the watchlist. */
+  watchlist_only: boolean;
+  sound: AlertSound;
+  cooldown_secs: number;
+}
+
 export interface AppSettings {
   /** Legacy single-chain URL — migrated by the backend on first load. */
   rpc_ws_url: string;
@@ -55,6 +73,7 @@ export interface AppSettings {
   language: "auto" | "en" | "ru";
   filters: Filters;
   watchlist: WatchEntry[];
+  alert_rules: AlertRule[];
 }
 
 export interface ConnectionStatus {
