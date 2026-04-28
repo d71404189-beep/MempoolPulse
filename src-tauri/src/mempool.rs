@@ -336,7 +336,18 @@ async fn build_pending_tx(
     } else {
         None
     };
-    let (label, summary) = decoder::decode(&input);
+    // Plain native-asset transfers (no calldata) get a friendly chain-specific
+    // label like "ETH transfer" / "BNB transfer" instead of falling through to
+    // the generic "raw call" placeholder.
+    let (label, summary) = if input.is_empty() || input.eq_ignore_ascii_case("0x") {
+        if value_native > 0.0 {
+            (Some(format!("{} transfer", chain.native_symbol)), None)
+        } else {
+            (None, None)
+        }
+    } else {
+        decoder::decode(&input)
+    };
 
     let native_usd = state.prices.usd(&chain.coingecko_id).await;
     let value_usd = if native_usd > 0.0 {

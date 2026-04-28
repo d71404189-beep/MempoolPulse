@@ -69,7 +69,7 @@ impl ChainConfig {
             native_symbol: "ETH".into(),
             coingecko_id: "ethereum".into(),
             rpc_ws_url: "wss://ethereum-rpc.publicnode.com".into(),
-            rpc_http_url: String::new(),
+            rpc_http_url: "https://ethereum-rpc.publicnode.com".into(),
             enabled: true,
         }
     }
@@ -80,7 +80,7 @@ impl ChainConfig {
             native_symbol: "ETH".into(),
             coingecko_id: "ethereum".into(),
             rpc_ws_url: "wss://arbitrum-one-rpc.publicnode.com".into(),
-            rpc_http_url: String::new(),
+            rpc_http_url: "https://arbitrum-one-rpc.publicnode.com".into(),
             enabled: false,
         }
     }
@@ -91,7 +91,7 @@ impl ChainConfig {
             native_symbol: "ETH".into(),
             coingecko_id: "ethereum".into(),
             rpc_ws_url: "wss://base-rpc.publicnode.com".into(),
-            rpc_http_url: String::new(),
+            rpc_http_url: "https://base-rpc.publicnode.com".into(),
             enabled: false,
         }
     }
@@ -102,7 +102,7 @@ impl ChainConfig {
             native_symbol: "BNB".into(),
             coingecko_id: "binancecoin".into(),
             rpc_ws_url: "wss://bsc-rpc.publicnode.com".into(),
-            rpc_http_url: String::new(),
+            rpc_http_url: "https://bsc-rpc.publicnode.com".into(),
             enabled: false,
         }
     }
@@ -188,6 +188,25 @@ impl AppSettings {
         for preset in ChainConfig::defaults() {
             if !self.chains.iter().any(|c| c.id == preset.id) {
                 self.chains.push(preset);
+            }
+        }
+        // Backfill empty URL fields with the publicnode defaults so users who
+        // never edit Settings get a working configuration out of the box.
+        for chain in self.chains.iter_mut() {
+            let default = match chain.id.as_str() {
+                "ethereum" => Some(ChainConfig::ethereum_default()),
+                "arbitrum" => Some(ChainConfig::arbitrum_default()),
+                "base" => Some(ChainConfig::base_default()),
+                "bsc" => Some(ChainConfig::bsc_default()),
+                _ => None,
+            };
+            if let Some(d) = default {
+                if chain.rpc_ws_url.trim().is_empty() {
+                    chain.rpc_ws_url = d.rpc_ws_url.clone();
+                }
+                if chain.rpc_http_url.trim().is_empty() {
+                    chain.rpc_http_url = d.rpc_http_url;
+                }
             }
         }
     }
