@@ -12,6 +12,12 @@ const EXPLORERS: Record<string, { tx: string; addr: string }> = {
   arbitrum: { tx: "https://arbiscan.io/tx/", addr: "https://arbiscan.io/address/" },
   base: { tx: "https://basescan.org/tx/", addr: "https://basescan.org/address/" },
   bsc: { tx: "https://bscscan.com/tx/", addr: "https://bscscan.com/address/" },
+  polygon: { tx: "https://polygonscan.com/tx/", addr: "https://polygonscan.com/address/" },
+  optimism: {
+    tx: "https://optimistic.etherscan.io/tx/",
+    addr: "https://optimistic.etherscan.io/address/",
+  },
+  avalanche: { tx: "https://snowtrace.io/tx/", addr: "https://snowtrace.io/address/" },
 };
 
 function whaleTier(usd: number | null | undefined): "" | "whale-s" | "whale-m" | "whale-l" {

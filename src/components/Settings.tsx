@@ -40,6 +40,33 @@ const DEFAULT_CHAINS: ChainConfig[] = [
     rpc_http_url: "https://bsc-rpc.publicnode.com",
     enabled: false,
   },
+  {
+    id: "polygon",
+    name: "Polygon",
+    native_symbol: "POL",
+    coingecko_id: "matic-network",
+    rpc_ws_url: "wss://polygon-bor-rpc.publicnode.com",
+    rpc_http_url: "https://polygon-bor-rpc.publicnode.com",
+    enabled: false,
+  },
+  {
+    id: "optimism",
+    name: "Optimism",
+    native_symbol: "ETH",
+    coingecko_id: "ethereum",
+    rpc_ws_url: "wss://optimism-rpc.publicnode.com",
+    rpc_http_url: "https://optimism-rpc.publicnode.com",
+    enabled: false,
+  },
+  {
+    id: "avalanche",
+    name: "Avalanche",
+    native_symbol: "AVAX",
+    coingecko_id: "avalanche-2",
+    rpc_ws_url: "wss://avalanche-c-chain-rpc.publicnode.com",
+    rpc_http_url: "https://avalanche-c-chain-rpc.publicnode.com",
+    enabled: false,
+  },
 ];
 
 interface Props {

@@ -220,10 +220,28 @@ async fn run_once(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> any
         .build()
         .ok();
 
+    // Application-level keepalive: many public RPC providers (publicnode,
+    // free-tier Alchemy / QuickNode, anything behind an idle-timeout reverse
+    // proxy) close WS connections that go quiet for ~30-60s, even when the
+    // subscription itself is healthy. We send a tungstenite ping every 25s so
+    // the underlying TCP connection always has recent activity.
+    let mut keepalive = tokio::time::interval(Duration::from_secs(25));
+    // Skip the immediate first tick — the connection was just opened.
+    keepalive.tick().await;
+
     loop {
-        let next = match buffered.take() {
-            Some(m) => Some(Ok(m)),
-            None => ws.next().await,
+        let next = if let Some(m) = buffered.take() {
+            Some(Ok(m))
+        } else {
+            tokio::select! {
+                m = ws.next() => m,
+                _ = keepalive.tick() => {
+                    if ws.send(Message::Ping(Default::default())).await.is_err() {
+                        return Err(anyhow!("WebSocket keepalive ping failed"));
+                    }
+                    continue;
+                }
+            }
         };
         let Some(msg) = next else { break };
         if *state.shutdown.read() {
