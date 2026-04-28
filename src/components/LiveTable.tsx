@@ -1,6 +1,26 @@
 import { useMemo, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AppSettings, PendingTx } from "../types";
 import { t, type Lang } from "../i18n";
+
+/**
+ * Map a chain id to its public block explorer base URL. Used to wire up the
+ * clickable hash / from / to cells in the live feed.
+ */
+const EXPLORERS: Record<string, { tx: string; addr: string }> = {
+  ethereum: { tx: "https://etherscan.io/tx/", addr: "https://etherscan.io/address/" },
+  arbitrum: { tx: "https://arbiscan.io/tx/", addr: "https://arbiscan.io/address/" },
+  base: { tx: "https://basescan.org/tx/", addr: "https://basescan.org/address/" },
+  bsc: { tx: "https://bscscan.com/tx/", addr: "https://bscscan.com/address/" },
+};
+
+function whaleTier(usd: number | null | undefined): "" | "whale-s" | "whale-m" | "whale-l" {
+  if (usd == null) return "";
+  if (usd >= 1_000_000) return "whale-l";
+  if (usd >= 100_000) return "whale-m";
+  if (usd >= 10_000) return "whale-s";
+  return "";
+}
 
 interface Props {
   txs: PendingTx[];
@@ -10,7 +30,24 @@ interface Props {
 
 export default function LiveTable({ txs, settings, lang }: Props) {
   const [search, setSearch] = useState("");
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const tr = (k: Parameters<typeof t>[1]) => t(lang, k);
+
+  const copy = async (key: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedKey(key);
+      window.setTimeout(() => setCopiedKey((c) => (c === key ? null : c)), 1200);
+    } catch {
+      // clipboard may be unavailable in some webviews; fail silently
+    }
+  };
+
+  const openExplorer = (chain: string, kind: "tx" | "addr", value: string) => {
+    const e = EXPLORERS[chain];
+    if (!e) return;
+    void openUrl(`${kind === "tx" ? e.tx : e.addr}${value}`);
+  };
 
   const watchSet = useMemo(() => {
     const set = new Set<string>();
@@ -99,13 +136,65 @@ export default function LiveTable({ txs, settings, lang }: Props) {
               return (
                 <tr
                   key={`${tx.chain}:${tx.hash}`}
-                  className={watchHit ? "watch-hit" : ""}
+                  className={[watchHit ? "watch-hit" : "", whaleTier(tx.value_usd)].filter(Boolean).join(" ")}
                   title={tx.summary ?? undefined}
                 >
                   <td><span className="chain-badge">{chainLabel(tx, settings)}</span></td>
-                  <td className="mono">{shorten(tx.hash)}</td>
-                  <td className="mono">{shorten(tx.from)}</td>
-                  <td className="mono">{tx.to ? shorten(tx.to) : <span className="muted">{tr("live.create")}</span>}</td>
+                  <td className="mono">
+                    <button
+                      type="button"
+                      className="link-cell"
+                      title={`${tr("live.action.open_explorer")} \u2014 ${tx.hash}`}
+                      onClick={() => openExplorer(tx.chain, "tx", tx.hash)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        void copy(`h:${tx.hash}`, tx.hash);
+                      }}
+                    >
+                      {shorten(tx.hash)}
+                      {copiedKey === `h:${tx.hash}` && (
+                        <span className="copied-flash">{tr("live.action.copied")}</span>
+                      )}
+                    </button>
+                  </td>
+                  <td className="mono">
+                    <button
+                      type="button"
+                      className="link-cell"
+                      title={`${tr("live.action.open_explorer")} \u2014 ${tx.from}`}
+                      onClick={() => openExplorer(tx.chain, "addr", tx.from)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        void copy(`f:${tx.hash}`, tx.from);
+                      }}
+                    >
+                      {shorten(tx.from)}
+                      {copiedKey === `f:${tx.hash}` && (
+                        <span className="copied-flash">{tr("live.action.copied")}</span>
+                      )}
+                    </button>
+                  </td>
+                  <td className="mono">
+                    {tx.to ? (
+                      <button
+                        type="button"
+                        className="link-cell"
+                        title={`${tr("live.action.open_explorer")} \u2014 ${tx.to}`}
+                        onClick={() => openExplorer(tx.chain, "addr", tx.to ?? "")}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          void copy(`t:${tx.hash}`, tx.to ?? "");
+                        }}
+                      >
+                        {shorten(tx.to)}
+                        {copiedKey === `t:${tx.hash}` && (
+                          <span className="copied-flash">{tr("live.action.copied")}</span>
+                        )}
+                      </button>
+                    ) : (
+                      <span className="muted">{tr("live.create")}</span>
+                    )}
+                  </td>
                   <td className="value-eth">
                     {tx.value_native.toFixed(4)} <span className="muted">{tx.native_symbol || "ETH"}</span>
                   </td>

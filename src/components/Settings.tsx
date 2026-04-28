@@ -9,7 +9,7 @@ const DEFAULT_CHAINS: ChainConfig[] = [
     native_symbol: "ETH",
     coingecko_id: "ethereum",
     rpc_ws_url: "wss://ethereum-rpc.publicnode.com",
-    rpc_http_url: "",
+    rpc_http_url: "https://ethereum-rpc.publicnode.com",
     enabled: true,
   },
   {
@@ -18,7 +18,7 @@ const DEFAULT_CHAINS: ChainConfig[] = [
     native_symbol: "ETH",
     coingecko_id: "ethereum",
     rpc_ws_url: "wss://arbitrum-one-rpc.publicnode.com",
-    rpc_http_url: "",
+    rpc_http_url: "https://arbitrum-one-rpc.publicnode.com",
     enabled: false,
   },
   {
@@ -27,7 +27,7 @@ const DEFAULT_CHAINS: ChainConfig[] = [
     native_symbol: "ETH",
     coingecko_id: "ethereum",
     rpc_ws_url: "wss://base-rpc.publicnode.com",
-    rpc_http_url: "",
+    rpc_http_url: "https://base-rpc.publicnode.com",
     enabled: false,
   },
   {
@@ -36,7 +36,7 @@ const DEFAULT_CHAINS: ChainConfig[] = [
     native_symbol: "BNB",
     coingecko_id: "binancecoin",
     rpc_ws_url: "wss://bsc-rpc.publicnode.com",
-    rpc_http_url: "",
+    rpc_http_url: "https://bsc-rpc.publicnode.com",
     enabled: false,
   },
 ];
@@ -139,7 +139,7 @@ export default function Settings({ settings, onSave, lang }: Props) {
               <div className="field">
                 <label>{tr("settings.chain.ws")}</label>
                 <input
-                  placeholder="wss://…"
+                  placeholder={DEFAULT_CHAINS.find((d) => d.id === c.id)?.rpc_ws_url ?? "wss://…"}
                   value={c.rpc_ws_url}
                   onChange={(e) => updateChain(i, { rpc_ws_url: e.target.value })}
                   spellCheck={false}
@@ -148,11 +148,23 @@ export default function Settings({ settings, onSave, lang }: Props) {
               <div className="field">
                 <label>{tr("settings.chain.https")}</label>
                 <input
-                  placeholder="https://…"
+                  placeholder={DEFAULT_CHAINS.find((d) => d.id === c.id)?.rpc_http_url ?? "https://…"}
                   value={c.rpc_http_url}
                   onChange={(e) => updateChain(i, { rpc_http_url: e.target.value })}
                   spellCheck={false}
                 />
+              </div>
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  className="btn-link"
+                  onClick={() => {
+                    const d = DEFAULT_CHAINS.find((x) => x.id === c.id);
+                    if (d) updateChain(i, { rpc_ws_url: d.rpc_ws_url, rpc_http_url: d.rpc_http_url });
+                  }}
+                >
+                  {tr("settings.chain.reset")}
+                </button>
               </div>
             </div>
           ))}
