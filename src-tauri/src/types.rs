@@ -106,6 +106,42 @@ impl ChainConfig {
             enabled: false,
         }
     }
+    pub fn polygon_default() -> Self {
+        Self {
+            id: "polygon".into(),
+            name: "Polygon".into(),
+            native_symbol: "POL".into(),
+            // Polygon migrated MATIC → POL in late 2024; CoinGecko keeps the
+            // historical id "matic-network" for the same token, so price
+            // lookups continue to resolve correctly.
+            coingecko_id: "matic-network".into(),
+            rpc_ws_url: "wss://polygon-bor-rpc.publicnode.com".into(),
+            rpc_http_url: "https://polygon-bor-rpc.publicnode.com".into(),
+            enabled: false,
+        }
+    }
+    pub fn optimism_default() -> Self {
+        Self {
+            id: "optimism".into(),
+            name: "Optimism".into(),
+            native_symbol: "ETH".into(),
+            coingecko_id: "ethereum".into(),
+            rpc_ws_url: "wss://optimism-rpc.publicnode.com".into(),
+            rpc_http_url: "https://optimism-rpc.publicnode.com".into(),
+            enabled: false,
+        }
+    }
+    pub fn avalanche_default() -> Self {
+        Self {
+            id: "avalanche".into(),
+            name: "Avalanche".into(),
+            native_symbol: "AVAX".into(),
+            coingecko_id: "avalanche-2".into(),
+            rpc_ws_url: "wss://avalanche-c-chain-rpc.publicnode.com".into(),
+            rpc_http_url: "https://avalanche-c-chain-rpc.publicnode.com".into(),
+            enabled: false,
+        }
+    }
 
     pub fn defaults() -> Vec<Self> {
         vec![
@@ -113,6 +149,9 @@ impl ChainConfig {
             Self::arbitrum_default(),
             Self::base_default(),
             Self::bsc_default(),
+            Self::polygon_default(),
+            Self::optimism_default(),
+            Self::avalanche_default(),
         ]
     }
 }
@@ -250,6 +289,9 @@ impl AppSettings {
                 "arbitrum" => Some(ChainConfig::arbitrum_default()),
                 "base" => Some(ChainConfig::base_default()),
                 "bsc" => Some(ChainConfig::bsc_default()),
+                "polygon" => Some(ChainConfig::polygon_default()),
+                "optimism" => Some(ChainConfig::optimism_default()),
+                "avalanche" => Some(ChainConfig::avalanche_default()),
                 _ => None,
             };
             if let Some(d) = default {
