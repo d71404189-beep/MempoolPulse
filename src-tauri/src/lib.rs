@@ -1,10 +1,13 @@
+mod anvil;
 mod decoder;
 mod license;
 mod mempool;
 mod prices;
+mod simulate;
 mod state;
 mod types;
 
+use crate::simulate::SimulationResult;
 use crate::state::AppState;
 use crate::types::{AppSettings, ConnectionStatus, LicenseStatus};
 use std::path::PathBuf;
@@ -73,6 +76,31 @@ async fn verify_license(
 }
 
 #[tauri::command]
+fn anvil_cached(app: AppHandle) -> bool {
+    anvil::is_cached(&app)
+}
+
+#[tauri::command]
+async fn simulate_tx(
+    chain_id: String,
+    tx_hash: String,
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<SimulationResult, String> {
+    let chain = {
+        let s = state.settings.read();
+        s.chains
+            .iter()
+            .find(|c| c.id == chain_id)
+            .cloned()
+            .ok_or_else(|| format!("Unknown chain id: {chain_id}"))?
+    };
+    simulate::simulate(app, chain, tx_hash)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn license_status(state: tauri::State<'_, AppState>) -> LicenseStatus {
     let key = state.settings.read().license_key.clone();
     LicenseStatus {
@@ -103,6 +131,8 @@ pub fn run() {
             connection_status,
             verify_license,
             license_status,
+            anvil_cached,
+            simulate_tx,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

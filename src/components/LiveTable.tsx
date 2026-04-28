@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AppSettings, PendingTx } from "../types";
 import { t, type Lang } from "../i18n";
+import SimulateModal from "./SimulateModal";
 
 /**
  * Map a chain id to its public block explorer base URL. Used to wire up the
@@ -37,6 +38,7 @@ interface Props {
 export default function LiveTable({ txs, settings, lang }: Props) {
   const [search, setSearch] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [simulating, setSimulating] = useState<PendingTx | null>(null);
   const tr = (k: Parameters<typeof t>[1]) => t(lang, k);
 
   const copy = async (key: string, value: string) => {
@@ -133,6 +135,7 @@ export default function LiveTable({ txs, settings, lang }: Props) {
               <th>{tr("live.col.usd")}</th>
               <th>{tr("live.col.gas")}</th>
               <th>{tr("live.col.method")}</th>
+              <th aria-label="simulate" />
             </tr>
           </thead>
           <tbody>
@@ -211,12 +214,29 @@ export default function LiveTable({ txs, settings, lang }: Props) {
                       {tx.label ?? tr("live.raw_call")}
                     </span>
                   </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn-mini"
+                      title={tr("simulate.button.tooltip")}
+                      onClick={() => setSimulating(tx)}
+                    >
+                      ▶ {tr("simulate.button")}
+                    </button>
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+      {simulating && (
+        <SimulateModal
+          tx={simulating}
+          lang={lang}
+          onClose={() => setSimulating(null)}
+        />
+      )}
     </div>
   );
 }
