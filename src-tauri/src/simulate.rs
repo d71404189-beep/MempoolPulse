@@ -159,16 +159,17 @@ async fn run_simulation(
         .unwrap_or("0x100000")
         .to_string();
 
-    // Top up the sender with enough ETH to cover gas, regardless of mainnet
-    // balance — simulation should never revert just because the impersonated
-    // account is short on funds.
+    // Top up the sender with absurdly large balance regardless of mainnet
+    // value, because the replayed tx may itself transfer many ETH (whale
+    // monitor!). Setting a uint128-max-ish value (~3.4×10^20 ETH) means the
+    // simulation never spuriously reverts on insufficient-balance errors.
     let _: Value = rpc(
         client,
         local,
         "anvil_setBalance",
-        json!([from, "0xDE0B6B3A7640000"]),
+        json!([from, "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"]),
     )
-    .await?; // 1 ETH
+    .await?;
     let _: Value = rpc(
         client,
         local,

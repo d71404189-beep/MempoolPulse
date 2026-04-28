@@ -129,19 +129,28 @@ pub async fn ensure(app: AppHandle) -> Result<PathBuf> {
         },
     );
 
+    // Extract to a .tmp sibling first, then rename once fully written. This
+    // is atomic on both Unix and Windows (ReplaceFile) and avoids leaving a
+    // corrupt partial binary under `dest` if the process is killed mid-write,
+    // which would otherwise make `is_cached()` return a false positive on
+    // the next launch.
     let dest = dir.join(anvil_filename());
+    let tmp = dir.join(format!("{}.tmp", anvil_filename()));
+    let _ = std::fs::remove_file(&tmp);
     if asset.ends_with(".zip") {
-        extract_anvil_from_zip(&buf, &dest)?;
+        extract_anvil_from_zip(&buf, &tmp)?;
     } else {
-        extract_anvil_from_targz(&buf, &dest)?;
+        extract_anvil_from_targz(&buf, &tmp)?;
     }
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
             .context("chmod +x on anvil")?;
     }
+    std::fs::rename(&tmp, &dest)
+        .with_context(|| format!("rename {} → {}", tmp.display(), dest.display()))?;
 
     let _ = app.emit(
         PROGRESS_EVENT,
