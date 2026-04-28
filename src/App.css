@@ -554,3 +554,125 @@ textarea {
   border-radius: 4px;
   white-space: nowrap;
 }
+
+/* ======================== Alerts: toast stack ======================== */
+.toast-stack {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--accent-dim);
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  box-shadow: 0 12px 28px -12px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(92, 242, 164, 0.08) inset;
+  cursor: pointer;
+  max-width: 460px;
+  text-align: left;
+  animation: toast-in 240ms ease-out;
+}
+.toast:hover {
+  border-color: var(--accent);
+  background: var(--bg-elev2);
+}
+.toast-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  flex-shrink: 0;
+}
+.toast-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toast-hash {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ======================== Alerts: rule editor ======================== */
+.alert-rules .rules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rule-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--bg-elev);
+}
+.rule-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.rule-name {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px dotted var(--border);
+  padding: 4px 2px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 200px;
+}
+.rule-name:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
+.rule-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 12px;
+}
+.chain-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pill {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.pill:hover {
+  border-color: var(--accent-dim);
+  color: var(--text);
+}
+.pill.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(92, 242, 164, 0.08);
+}
+.hint {
+  font-size: 11px;
+  margin-top: 4px;
+  display: block;
+}

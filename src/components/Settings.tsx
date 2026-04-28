@@ -1,6 +1,7 @@
 import { useState } from "react";
-import type { AppSettings, ChainConfig, WatchEntry } from "../types";
+import type { AlertRule, AppSettings, ChainConfig, WatchEntry } from "../types";
 import { t, type Lang } from "../i18n";
+import AlertRulesEditor from "./AlertRulesEditor";
 
 const DEFAULT_CHAINS: ChainConfig[] = [
   {
@@ -255,6 +256,16 @@ export default function Settings({ settings, onSave, lang }: Props) {
             }
           />
         </div>
+      </div>
+
+      <div className="section">
+        <h3>{tr("settings.section.alerts")}</h3>
+        <AlertRulesEditor
+          rules={draft.alert_rules}
+          chains={draft.chains}
+          onChange={(next: AlertRule[]) => setDraft((d) => ({ ...d, alert_rules: next }))}
+          lang={lang}
+        />
       </div>
 
       <div className="section">

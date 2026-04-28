@@ -141,6 +141,12 @@ pub struct AppSettings {
     pub filters: Filters,
     /// List of watched addresses; matches highlight rows and trigger system notifications.
     pub watchlist: Vec<WatchEntry>,
+    /// User-defined alert rules. When a pending tx matches an enabled rule,
+    /// the frontend plays the rule's sound and shows a toast. Empty by
+    /// default; the frontend offers a "Load presets" button to seed three
+    /// useful starting rules.
+    #[serde(default)]
+    pub alert_rules: Vec<AlertRule>,
 }
 
 fn default_language() -> String {
@@ -158,8 +164,54 @@ impl Default for AppSettings {
             language: default_language(),
             filters: Filters::default(),
             watchlist: Vec::new(),
+            alert_rules: Vec::new(),
         }
     }
+}
+
+/// A single alert rule. The frontend evaluates rules against incoming pending
+/// transactions and plays a sound + shows a toast when one matches.
+///
+/// All filter fields are AND-combined; an empty `chains` list matches any
+/// chain, an absent `min_value_usd` skips the value check, and an empty
+/// `label_contains` skips the label check. `cooldown_secs` rate-limits how
+/// often the same rule can fire.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertRule {
+    /// Stable id (also used as React key). Generated client-side.
+    pub id: String,
+    /// User-facing rule name shown in toasts.
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Chain ids to match; empty matches any.
+    #[serde(default)]
+    pub chains: Vec<String>,
+    /// Minimum USD value of the tx (None = any).
+    #[serde(default)]
+    pub min_value_usd: Option<f64>,
+    /// Case-insensitive substring of `tx.label` (e.g. "swap", "borrow").
+    #[serde(default)]
+    pub label_contains: Option<String>,
+    /// When true, only fire if from or to is in the watchlist.
+    #[serde(default)]
+    pub watchlist_only: bool,
+    /// Sound id played by the frontend (one of: "ping", "chime", "bell", "siren").
+    #[serde(default = "default_sound")]
+    pub sound: String,
+    /// Minimum seconds between consecutive fires of the same rule.
+    #[serde(default = "default_cooldown")]
+    pub cooldown_secs: u64,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_sound() -> String {
+    "chime".to_string()
+}
+fn default_cooldown() -> u64 {
+    15
 }
 
 impl AppSettings {
