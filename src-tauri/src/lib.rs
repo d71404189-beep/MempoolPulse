@@ -2,6 +2,7 @@ mod anvil;
 mod decoder;
 mod license;
 mod mempool;
+mod non_evm;
 mod prices;
 mod simulate;
 mod state;

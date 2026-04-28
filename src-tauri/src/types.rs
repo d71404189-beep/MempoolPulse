@@ -39,10 +39,29 @@ pub struct PendingTx {
     pub seen_at: i64,
 }
 
-/// One EVM chain the user wants to monitor. The four built-in chains
-/// (Ethereum, Arbitrum, Base, BNB Chain) share the same selector decoder
-/// because Uniswap V2/V3 forks and ERC20 are deployed identically across
-/// these networks.
+/// What kind of chain we're talking to. Determines which worker dispatches:
+/// EVM uses our standard mempool subscription; the non-EVM kinds each have
+/// a dedicated worker (see `non_evm.rs`) because their networks expose
+/// different streaming APIs and tx models.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ChainKind {
+    #[default]
+    Evm,
+    Bitcoin,
+    Solana,
+    Tron,
+    Ton,
+    Sui,
+}
+
+/// One chain the user wants to monitor. Most fields apply to all chain kinds;
+/// `rpc_ws_url` / `rpc_http_url` semantics vary slightly per kind:
+/// - EVM: standard JSON-RPC WebSocket + HTTPS
+/// - Bitcoin: only `rpc_ws_url` is used (mempool.space WebSocket)
+/// - Solana: standard mainnet WebSocket + HTTPS RPC
+/// - TRON / TON: only `rpc_http_url` is used (REST polling)
+/// - Sui: only `rpc_ws_url` is used (Mysten WebSocket)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChainConfig {
     /// Stable identifier used as the map key (e.g. "ethereum").
@@ -59,6 +78,11 @@ pub struct ChainConfig {
     pub rpc_http_url: String,
     /// Whether the worker should subscribe to this chain on launch.
     pub enabled: bool,
+    /// Which subscription mechanism to use for this chain. Defaults to
+    /// `Evm` so existing user settings.json files (which don't have this
+    /// field) keep working transparently.
+    #[serde(default)]
+    pub kind: ChainKind,
 }
 
 impl ChainConfig {
@@ -71,6 +95,7 @@ impl ChainConfig {
             rpc_ws_url: "wss://ethereum-rpc.publicnode.com".into(),
             rpc_http_url: "https://ethereum-rpc.publicnode.com".into(),
             enabled: true,
+            kind: ChainKind::Evm,
         }
     }
     pub fn arbitrum_default() -> Self {
@@ -82,6 +107,7 @@ impl ChainConfig {
             rpc_ws_url: "wss://arbitrum-one-rpc.publicnode.com".into(),
             rpc_http_url: "https://arbitrum-one-rpc.publicnode.com".into(),
             enabled: false,
+            kind: ChainKind::Evm,
         }
     }
     pub fn base_default() -> Self {
@@ -93,6 +119,7 @@ impl ChainConfig {
             rpc_ws_url: "wss://base-rpc.publicnode.com".into(),
             rpc_http_url: "https://base-rpc.publicnode.com".into(),
             enabled: false,
+            kind: ChainKind::Evm,
         }
     }
     pub fn bsc_default() -> Self {
@@ -104,6 +131,7 @@ impl ChainConfig {
             rpc_ws_url: "wss://bsc-rpc.publicnode.com".into(),
             rpc_http_url: "https://bsc-rpc.publicnode.com".into(),
             enabled: false,
+            kind: ChainKind::Evm,
         }
     }
     pub fn polygon_default() -> Self {
@@ -118,6 +146,7 @@ impl ChainConfig {
             rpc_ws_url: "wss://polygon-bor-rpc.publicnode.com".into(),
             rpc_http_url: "https://polygon-bor-rpc.publicnode.com".into(),
             enabled: false,
+            kind: ChainKind::Evm,
         }
     }
     pub fn optimism_default() -> Self {
@@ -129,6 +158,7 @@ impl ChainConfig {
             rpc_ws_url: "wss://optimism-rpc.publicnode.com".into(),
             rpc_http_url: "https://optimism-rpc.publicnode.com".into(),
             enabled: false,
+            kind: ChainKind::Evm,
         }
     }
     pub fn avalanche_default() -> Self {
@@ -140,6 +170,68 @@ impl ChainConfig {
             rpc_ws_url: "wss://avalanche-c-chain-rpc.publicnode.com".into(),
             rpc_http_url: "https://avalanche-c-chain-rpc.publicnode.com".into(),
             enabled: false,
+            kind: ChainKind::Evm,
+        }
+    }
+
+    pub fn bitcoin_default() -> Self {
+        Self {
+            id: "bitcoin".into(),
+            name: "Bitcoin".into(),
+            native_symbol: "BTC".into(),
+            coingecko_id: "bitcoin".into(),
+            rpc_ws_url: "wss://mempool.space/api/v1/ws".into(),
+            rpc_http_url: "https://mempool.space/api".into(),
+            enabled: false,
+            kind: ChainKind::Bitcoin,
+        }
+    }
+    pub fn solana_default() -> Self {
+        Self {
+            id: "solana".into(),
+            name: "Solana".into(),
+            native_symbol: "SOL".into(),
+            coingecko_id: "solana".into(),
+            rpc_ws_url: "wss://api.mainnet-beta.solana.com".into(),
+            rpc_http_url: "https://api.mainnet-beta.solana.com".into(),
+            enabled: false,
+            kind: ChainKind::Solana,
+        }
+    }
+    pub fn tron_default() -> Self {
+        Self {
+            id: "tron".into(),
+            name: "TRON".into(),
+            native_symbol: "TRX".into(),
+            coingecko_id: "tron".into(),
+            rpc_ws_url: String::new(),
+            rpc_http_url: "https://api.trongrid.io".into(),
+            enabled: false,
+            kind: ChainKind::Tron,
+        }
+    }
+    pub fn ton_default() -> Self {
+        Self {
+            id: "ton".into(),
+            name: "TON".into(),
+            native_symbol: "TON".into(),
+            coingecko_id: "the-open-network".into(),
+            rpc_ws_url: String::new(),
+            rpc_http_url: "https://toncenter.com/api/v2".into(),
+            enabled: false,
+            kind: ChainKind::Ton,
+        }
+    }
+    pub fn sui_default() -> Self {
+        Self {
+            id: "sui".into(),
+            name: "Sui".into(),
+            native_symbol: "SUI".into(),
+            coingecko_id: "sui".into(),
+            rpc_ws_url: "wss://fullnode.mainnet.sui.io:443".into(),
+            rpc_http_url: "https://fullnode.mainnet.sui.io:443".into(),
+            enabled: false,
+            kind: ChainKind::Sui,
         }
     }
 
@@ -152,6 +244,11 @@ impl ChainConfig {
             Self::polygon_default(),
             Self::optimism_default(),
             Self::avalanche_default(),
+            Self::bitcoin_default(),
+            Self::solana_default(),
+            Self::tron_default(),
+            Self::ton_default(),
+            Self::sui_default(),
         ]
     }
 }
@@ -292,6 +389,11 @@ impl AppSettings {
                 "polygon" => Some(ChainConfig::polygon_default()),
                 "optimism" => Some(ChainConfig::optimism_default()),
                 "avalanche" => Some(ChainConfig::avalanche_default()),
+                "bitcoin" => Some(ChainConfig::bitcoin_default()),
+                "solana" => Some(ChainConfig::solana_default()),
+                "tron" => Some(ChainConfig::tron_default()),
+                "ton" => Some(ChainConfig::ton_default()),
+                "sui" => Some(ChainConfig::sui_default()),
                 _ => None,
             };
             if let Some(d) = default {

@@ -1,7 +1,7 @@
 [package]
 name = "mempoolpulse"
-version = "1.5.0"
-description = "Real-time multi-chain mempool monitor (Ethereum, Arbitrum, Base, BNB Chain, Polygon, Optimism, Avalanche) with anvil-based pre-confirmation tx simulation."
+version = "1.6.0"
+description = "Real-time mempool monitor across 12 chains: Ethereum, Arbitrum, Base, BNB Chain, Polygon, Optimism, Avalanche, Bitcoin, Solana, TRON, TON, Sui — with anvil-based pre-confirmation tx simulation."
 authors = ["MempoolPulse"]
 edition = "2021"
 

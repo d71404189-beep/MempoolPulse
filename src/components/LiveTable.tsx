@@ -19,6 +19,11 @@ const EXPLORERS: Record<string, { tx: string; addr: string }> = {
     addr: "https://optimistic.etherscan.io/address/",
   },
   avalanche: { tx: "https://snowtrace.io/tx/", addr: "https://snowtrace.io/address/" },
+  bitcoin: { tx: "https://mempool.space/tx/", addr: "https://mempool.space/address/" },
+  solana: { tx: "https://solscan.io/tx/", addr: "https://solscan.io/account/" },
+  tron: { tx: "https://tronscan.org/#/transaction/", addr: "https://tronscan.org/#/address/" },
+  ton: { tx: "https://tonviewer.com/transaction/", addr: "https://tonviewer.com/" },
+  sui: { tx: "https://suiscan.xyz/mainnet/tx/", addr: "https://suiscan.xyz/mainnet/account/" },
 };
 
 function whaleTier(usd: number | null | undefined): "" | "whale-s" | "whale-m" | "whale-l" {
@@ -215,14 +220,18 @@ export default function LiveTable({ txs, settings, lang }: Props) {
                     </span>
                   </td>
                   <td>
-                    <button
-                      type="button"
-                      className="btn-mini"
-                      title={tr("simulate.button.tooltip")}
-                      onClick={() => setSimulating(tx)}
-                    >
-                      ▶ {tr("simulate.button")}
-                    </button>
+                    {isSimulatableChain(tx.chain, settings) ? (
+                      <button
+                        type="button"
+                        className="btn-mini"
+                        title={tr("simulate.button.tooltip")}
+                        onClick={() => setSimulating(tx)}
+                      >
+                        ▶ {tr("simulate.button")}
+                      </button>
+                    ) : (
+                      <span className="muted small" title={tr("simulate.unsupported")}>—</span>
+                    )}
                   </td>
                 </tr>
               );
@@ -239,6 +248,14 @@ export default function LiveTable({ txs, settings, lang }: Props) {
       )}
     </div>
   );
+}
+
+function isSimulatableChain(chainId: string, settings: AppSettings | null): boolean {
+  // Only EVM chains support anvil-fork simulation. Default kind = "evm" when
+  // unset (back-compat with chains saved before the kind field existed).
+  const c = settings?.chains.find((x) => x.id === chainId);
+  const kind = c?.kind ?? "evm";
+  return kind === "evm";
 }
 
 function shorten(addr: string) {

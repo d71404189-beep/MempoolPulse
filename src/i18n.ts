@@ -94,6 +94,8 @@ const messages = {
 
     "simulate.button": "Simulate",
     "simulate.button.tooltip": "Replay this pending tx against a forked anvil to see what would happen",
+    "simulate.unsupported": "Simulation is only available for EVM chains (anvil-based fork replay).",
+
     "simulate.title": "Simulation",
     "simulate.tx": "Transaction",
     "simulate.starting": "Starting…",
@@ -225,6 +227,8 @@ const messages = {
 
     "simulate.button": "Симуляция",
     "simulate.button.tooltip": "Прогнать pending-транзакцию через форк-anvil и увидеть результат до подтверждения",
+    "simulate.unsupported": "Симуляция доступна только для EVM-сетей (форк через anvil).",
+
     "simulate.title": "Симуляция транзакции",
     "simulate.tx": "Транзакция",
     "simulate.starting": "Запускаем…",

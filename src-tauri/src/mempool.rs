@@ -9,8 +9,9 @@
 //! HTTP.
 
 use crate::decoder;
+use crate::non_evm;
 use crate::state::AppState;
-use crate::types::{ChainConfig, ConnectionStatus, Filters, PendingTx};
+use crate::types::{ChainConfig, ChainKind, ConnectionStatus, Filters, PendingTx};
 use anyhow::{anyhow, Context};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
@@ -21,8 +22,8 @@ use tauri::{AppHandle, Emitter};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
-const EVENT_PENDING: &str = "mempool://pending";
-const EVENT_STATUS: &str = "mempool://status";
+pub(crate) const EVENT_PENDING: &str = "mempool://pending";
+pub(crate) const EVENT_STATUS: &str = "mempool://status";
 
 /// How long to wait for the first pending-tx notification after an
 /// `alchemy_pendingTransactions` subscription is acknowledged. Some providers
@@ -60,9 +61,14 @@ pub async fn restart(app: AppHandle, state: AppState) {
         let app_clone = app.clone();
         let state_clone = state.clone();
         let chain_id = chain.id.clone();
-        let handle = tokio::spawn(async move {
-            run_with_reconnect(app_clone, state_clone, chain).await;
-        });
+        let handle = match chain.kind {
+            ChainKind::Evm => tokio::spawn(async move {
+                run_with_reconnect(app_clone, state_clone, chain).await;
+            }),
+            _ => tokio::spawn(async move {
+                non_evm::run_with_reconnect(app_clone, state_clone, chain).await;
+            }),
+        };
         state.workers.lock().await.insert(chain_id, handle);
     }
 }
@@ -445,7 +451,7 @@ fn passes_filters(tx: &PendingTx, filters: &Filters, state: &AppState) -> bool {
 
 /// Update the cached connection status for a chain and emit `mempool://status`
 /// to the frontend.
-fn update_status_keyed(
+pub(crate) fn update_status_keyed(
     app: &AppHandle,
     state: &AppState,
     chain: &ChainConfig,
@@ -524,7 +530,7 @@ async fn wait_for_pending_notification(
     Ok(None)
 }
 
-fn redact(url: &str) -> String {
+pub(crate) fn redact(url: &str) -> String {
     if let Some(idx) = url.rfind('/') {
         let (head, tail) = url.split_at(idx + 1);
         if tail.len() > 6 {
