@@ -34,6 +34,8 @@ export interface Filters {
   buffer_size: number;
 }
 
+export type ChainKind = "evm" | "bitcoin" | "solana" | "tron" | "ton" | "sui";
+
 export interface ChainConfig {
   id: string;
   name: string;
@@ -42,6 +44,7 @@ export interface ChainConfig {
   rpc_ws_url: string;
   rpc_http_url: string;
   enabled: boolean;
+  kind?: ChainKind;
 }
 
 export type AlertSound = "ping" | "chime" | "bell" | "siren";
