@@ -217,7 +217,7 @@ impl ChainConfig {
             native_symbol: "TON".into(),
             coingecko_id: "the-open-network".into(),
             rpc_ws_url: String::new(),
-            rpc_http_url: "https://toncenter.com/api/v2".into(),
+            rpc_http_url: "https://toncenter.com/api/v3".into(),
             enabled: false,
             kind: ChainKind::Ton,
         }
@@ -401,8 +401,17 @@ impl AppSettings {
                     chain.rpc_ws_url = d.rpc_ws_url.clone();
                 }
                 if chain.rpc_http_url.trim().is_empty() {
-                    chain.rpc_http_url = d.rpc_http_url;
+                    chain.rpc_http_url = d.rpc_http_url.clone();
                 }
+            }
+        }
+
+        // v1.6.0 shipped TON pointed at toncenter v2; v1.6.1 needs v3 for
+        // value + opcode decoding. Upgrade users who never customised the
+        // URL transparently. (Custom URLs are left alone.)
+        for chain in self.chains.iter_mut() {
+            if chain.id == "ton" && chain.rpc_http_url.trim() == "https://toncenter.com/api/v2" {
+                chain.rpc_http_url = ChainConfig::ton_default().rpc_http_url;
             }
         }
     }
