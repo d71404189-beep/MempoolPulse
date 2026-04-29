@@ -53,7 +53,7 @@ export default function App() {
       setSettings(s);
       const conns: ConnectionStatus[] = await invoke("connection_status");
       setStatusMap(toMap(conns));
-      const hasEnabled = s.chains.some((c) => c.enabled && c.rpc_ws_url);
+      const hasEnabled = s.chains.some(hasUsableUrl);
       if (license.valid && hasEnabled) {
         await invoke("start_streaming");
       }
@@ -118,10 +118,21 @@ export default function App() {
   const handleLicensed = async (next: AppSettings) => {
     setLicensed(true);
     setSettings(next);
-    if (next.chains.some((c) => c.enabled && c.rpc_ws_url)) {
+    if (next.chains.some(hasUsableUrl)) {
       await invoke("start_streaming");
     }
   };
+
+  // A chain auto-starts streaming if it's enabled and has whichever URL its
+  // worker actually uses: WebSocket for EVM/Bitcoin/Solana/Sui, HTTP for
+  // TRON/TON. Without this distinction, TRON/TON-only configs (which leave
+  // rpc_ws_url empty by design) would never auto-start.
+  function hasUsableUrl(c: AppSettings["chains"][number]): boolean {
+    if (!c.enabled) return false;
+    const kind = c.kind ?? "evm";
+    if (kind === "tron" || kind === "ton") return c.rpc_http_url.length > 0;
+    return c.rpc_ws_url.length > 0;
+  }
 
   const headerStats = useMemo(() => {
     const total = txs.length;

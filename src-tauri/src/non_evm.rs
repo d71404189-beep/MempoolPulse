@@ -50,8 +50,12 @@ pub async fn run_with_reconnect(app: AppHandle, state: AppState, chain: ChainCon
             return;
         }
 
+        // Pick the URL the worker actually connects with so the empty-URL
+        // guard and the "Connecting to …" status reflect reality. WS-based
+        // kinds (Bitcoin, Solana, Sui) check rpc_ws_url; HTTP-polling kinds
+        // (TRON, TON) check rpc_http_url.
         let primary_url = match current.kind {
-            ChainKind::Bitcoin | ChainKind::Sui => current.rpc_ws_url.clone(),
+            ChainKind::Bitcoin | ChainKind::Solana | ChainKind::Sui => current.rpc_ws_url.clone(),
             _ => current.rpc_http_url.clone(),
         };
         if primary_url.is_empty() {
@@ -115,8 +119,8 @@ fn emit_tx(app: &AppHandle, tx: PendingTx) {
     let _ = app.emit(EVENT_PENDING, &tx);
 }
 
-fn now_secs() -> i64 {
-    Utc::now().timestamp()
+fn now_millis() -> i64 {
+    Utc::now().timestamp_millis()
 }
 
 // --------------------------------------------------------------------------
@@ -279,7 +283,7 @@ fn bitcoin_tx_to_pending(
         selector: None,
         label: Some("BTC transfer".into()),
         summary: Some(format!("{in_count} in → {out_count} out")),
-        seen_at: now_secs() * 1000,
+        seen_at: now_millis(),
     })
 }
 
@@ -397,7 +401,7 @@ async fn run_solana(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> R
                 selector: None,
                 label: Some(label),
                 summary,
-                seen_at: now_secs() * 1000,
+                seen_at: now_millis(),
             },
         );
     }
@@ -539,7 +543,7 @@ fn tron_tx_to_pending(tx: &Value, chain: &ChainConfig, price_usd: f64) -> Option
         selector: None,
         label: Some(format!("TRON: {contract_type}")),
         summary: None,
-        seen_at: now_secs() * 1000,
+        seen_at: now_millis(),
     })
 }
 
@@ -630,7 +634,7 @@ fn ton_tx_to_pending(t: &Value, chain: &ChainConfig, _price_usd: f64) -> Option<
         selector: None,
         label: Some("TON message".into()),
         summary: None,
-        seen_at: now_secs() * 1000,
+        seen_at: now_millis(),
     })
 }
 
@@ -721,7 +725,7 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
                 selector: None,
                 label: Some(format!("Sui: {tx_kind}")),
                 summary: None,
-                seen_at: now_secs() * 1000,
+                seen_at: now_millis(),
             },
         );
     }

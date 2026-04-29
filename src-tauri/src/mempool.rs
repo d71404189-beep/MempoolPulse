@@ -395,7 +395,7 @@ async fn build_pending_tx(
         selector,
         label,
         summary,
-        seen_at: Utc::now().timestamp(),
+        seen_at: Utc::now().timestamp_millis(),
     })
 }
 
@@ -415,7 +415,7 @@ fn stub_from_hash(hash: &str, chain: &ChainConfig) -> PendingTx {
         selector: None,
         label: Some("Pending (hash only)".into()),
         summary: Some("Add an HTTPS RPC URL in settings to decode full tx bodies.".into()),
-        seen_at: Utc::now().timestamp(),
+        seen_at: Utc::now().timestamp_millis(),
     }
 }
 
