@@ -733,6 +733,18 @@ fn ton_label(in_msg: &Value) -> String {
 const SUI_ENRICH_CONCURRENCY: usize = 6;
 const SUI_COIN_TYPE: &str = "0x2::sui::SUI";
 
+/// RAII guard that flips `alive` to `false` when this worker invocation
+/// exits (success, error, or panic). Spawned enrichment tasks check the
+/// flag before emitting so they don't surface stale events from a torn-down
+/// worker after `mempool::restart()` aborts the parent JoinHandle.
+struct AliveGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+impl Drop for AliveGuard {
+    fn drop(&mut self) {
+        self.0
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Result<()> {
     let req = chain.rpc_ws_url.as_str().into_client_request()?;
     let (mut ws, _) = tokio_tungstenite::connect_async(req)
@@ -752,6 +764,8 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
         .timeout(Duration::from_secs(8))
         .build()?;
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(SUI_ENRICH_CONCURRENCY));
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let _alive_guard = AliveGuard(alive.clone());
 
     while let Some(msg) = ws.next().await {
         if *state.shutdown.read() {
@@ -795,12 +809,26 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
         let chain_c = chain.clone();
         let client_c = http_client.clone();
         let sem = semaphore.clone();
+        let alive_c = alive.clone();
         tokio::spawn(async move {
+            // Cheap check before queueing on the semaphore, so a long backlog
+            // doesn't keep flushing after the worker has already been torn down.
+            if !alive_c.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
             let _permit = match sem.acquire_owned().await {
                 Ok(p) => p,
                 Err(_) => return,
             };
+            if !alive_c.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
             let pt = sui_enrich(&client_c, &chain_c, &state_c, &digest, &sender_hint).await;
+            // Final check after the network round-trip — the worker may
+            // have been aborted while the HTTP call was in flight.
+            if !alive_c.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
             emit_tx(&app_c, pt);
         });
     }
