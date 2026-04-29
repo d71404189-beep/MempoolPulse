@@ -548,8 +548,13 @@ fn tron_tx_to_pending(tx: &Value, chain: &ChainConfig, price_usd: f64) -> Option
 }
 
 // --------------------------------------------------------------------------
-// TON — Toncenter v2 polling (no public WebSocket on the free endpoint)
+// TON — Toncenter v3 polling
 // --------------------------------------------------------------------------
+//
+// Toncenter v3 returns full transaction bodies (in_msg.value + decoded
+// opcodes) in a single `/transactions` call, so we can emit native value
+// and human-readable labels without N+1 follow-up requests. The default
+// chain URL is `https://toncenter.com/api/v3`.
 
 async fn run_ton(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Result<()> {
     let client = reqwest::Client::builder()
@@ -559,10 +564,8 @@ async fn run_ton(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
     let mut last_lt: u64 = 0;
     let mut last_price_at = std::time::Instant::now();
     let mut current_price = state.prices.usd(&chain.coingecko_id).await;
-
-    // Bootstrap: walk getMasterchainInfo → getBlockTransactions to get a
-    // baseline `lt` we'll consider "already seen", then start polling.
     let base = chain.rpc_http_url.trim_end_matches('/');
+
     loop {
         if *state.shutdown.read() {
             return Ok(());
@@ -575,26 +578,23 @@ async fn run_ton(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
             last_price_at = std::time::Instant::now();
         }
 
-        // Pull the latest master-chain transactions across the recent block.
-        // Toncenter exposes /getRecentTransactions; we use it as a stream
-        // proxy. On rate-limit (429) we just back off and retry.
-        let url = format!("{}/getMasterchainInfo", base);
-        let info: Value = client.get(&url).send().await?.json().await?;
-        let last_seqno = info
-            .pointer("/result/last/seqno")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| anyhow!("toncenter: no master seqno"))?;
-        let workchain = -1i32;
-        let shard = "-9223372036854775808"; // 0x8000000000000000 master shard
-
-        let txs_url = format!(
-            "{}/getBlockTransactions?workchain={}&shard={}&seqno={}&count=40",
-            base, workchain, shard, last_seqno
-        );
-        let blk: Value = client.get(&txs_url).send().await?.json().await?;
-        if let Some(arr) = blk.pointer("/result/transactions").and_then(|v| v.as_array()) {
+        // Pull the most recent transactions. We sort desc, so the first item
+        // is freshest; we walk the page and keep emitting until we hit our
+        // last_lt cursor.
+        let url = format!("{}/transactions?limit=50&sort=desc", base);
+        let res = client.get(&url).send().await?;
+        if !res.status().is_success() {
+            return Err(anyhow!("toncenter: HTTP {}", res.status()));
+        }
+        let body: Value = res.json().await?;
+        if let Some(arr) = body.get("transactions").and_then(|v| v.as_array()) {
+            let mut max_lt = last_lt;
             for t in arr {
-                let lt = t.get("lt").and_then(|v| v.as_str()).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                let lt = t
+                    .get("lt")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
                 if lt <= last_lt {
                     continue;
                 }
@@ -603,44 +603,147 @@ async fn run_ton(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
                         emit_tx(app, pt);
                     }
                 }
-                if lt > last_lt {
-                    last_lt = lt;
+                if lt > max_lt {
+                    max_lt = lt;
                 }
             }
+            last_lt = max_lt;
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
-fn ton_tx_to_pending(t: &Value, chain: &ChainConfig, _price_usd: f64) -> Option<PendingTx> {
+fn ton_tx_to_pending(t: &Value, chain: &ChainConfig, price_usd: f64) -> Option<PendingTx> {
     let hash = t.get("hash").and_then(|v| v.as_str())?.to_string();
     let account = t
         .get("account")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    let in_msg = t.get("in_msg").cloned().unwrap_or(Value::Null);
+    let from = in_msg
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let to = in_msg
+        .get("destination")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            // Fall back to first out_msg destination for tx without an in_msg
+            // (e.g. an external-out contract emission).
+            t.pointer("/out_msgs/0/destination")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
+
+    let value_nano: u128 = in_msg
+        .get("value")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<u128>().ok())
+        .unwrap_or_else(|| in_msg.get("value").and_then(|v| v.as_u64()).unwrap_or(0) as u128);
+    let value_native = value_nano as f64 / 1_000_000_000.0;
+    let value_usd = if price_usd > 0.0 {
+        Some(value_native * price_usd)
+    } else {
+        None
+    };
+
+    // v3 sometimes pre-decodes well-known opcodes; fall back to body opcode
+    // hex matching when it doesn't.
+    let label = ton_label(&in_msg);
+
+    let summary = in_msg
+        .get("decoded_body")
+        .and_then(|b| b.get("text"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     Some(PendingTx {
         chain: chain.id.clone(),
         native_symbol: "TON".into(),
         hash,
-        from: account,
-        to: None,
-        value_wei: "0".into(),
-        value_native: 0.0,
-        value_usd: None,
+        from: if from.is_empty() { account } else { from },
+        to,
+        value_wei: value_nano.to_string(),
+        value_native,
+        value_usd,
         gas_gwei: None,
         gas_limit: None,
         input: String::new(),
         selector: None,
-        label: Some("TON message".into()),
-        summary: None,
+        label: Some(label),
+        summary,
         seen_at: now_millis(),
     })
 }
 
+fn ton_label(in_msg: &Value) -> String {
+    // Friendly name from toncenter v3's decoder when present.
+    if let Some(op) = in_msg.get("decoded_op_name").and_then(|v| v.as_str()) {
+        return match op {
+            "jetton_transfer" => "TON: Jetton transfer",
+            "jetton_internal_transfer" => "TON: Jetton internal",
+            "jetton_burn" => "TON: Jetton burn",
+            "nft_transfer" => "TON: NFT transfer",
+            "nft_ownership_assigned" => "TON: NFT received",
+            "stonfi_swap" => "TON: STON.fi swap",
+            "stonfi_swap_v2" => "TON: STON.fi v2 swap",
+            "dedust_swap" => "TON: DeDust swap",
+            "dedust_swap_external" => "TON: DeDust swap",
+            "wallet_signed_internal_v5" => "TON: Wallet v5",
+            "wallet_signed_external_v5" => "TON: Wallet v5",
+            "telegram_payments" => "TON: Telegram payment",
+            other => return format!("TON: {other}"),
+        }
+        .into();
+    }
+    // Fall back to the raw 32-bit opcode in body_hash-prefix form.
+    if let Some(op_hex) = in_msg.get("opcode").and_then(|v| v.as_str()) {
+        return match op_hex {
+            "0x00000000" | "" => "TON transfer".into(),
+            "0x0f8a7ea5" => "TON: Jetton transfer".into(),
+            "0x178d4519" => "TON: Jetton internal".into(),
+            "0x595f07bc" => "TON: Jetton burn".into(),
+            "0x05138d91" => "TON: NFT transfer".into(),
+            "0x05fcd673" => "TON: NFT ownership".into(),
+            "0x25938561" => "TON: STON.fi swap".into(),
+            "0xe3a0d482" => "TON: DeDust swap".into(),
+            other => format!("TON: op {other}"),
+        };
+    }
+    // No decoded op + no opcode = simple value-only transfer.
+    "TON transfer".into()
+}
+
 // --------------------------------------------------------------------------
-// Sui — Mysten WebSocket subscribeTransaction
+// Sui — Mysten WebSocket subscribeTransaction + bounded follow-up fetch
 // --------------------------------------------------------------------------
+//
+// `suix_subscribeTransaction` only returns the digest + sender; balance
+// changes and friendly Move-call labels live in `sui_getTransactionBlock`.
+// We do a follow-up RPC per digest with bounded concurrency (semaphore)
+// so the worker never has more than N in-flight enrichment calls. If the
+// follow-up fails (rate limit, 5xx, etc.) we fall back to emitting the
+// minimal record so the user still sees the activity.
+
+const SUI_ENRICH_CONCURRENCY: usize = 6;
+const SUI_COIN_TYPE: &str = "0x2::sui::SUI";
+
+/// RAII guard that flips `alive` to `false` when this worker invocation
+/// exits (success, error, or panic). Spawned enrichment tasks check the
+/// flag before emitting so they don't surface stale events from a torn-down
+/// worker after `mempool::restart()` aborts the parent JoinHandle.
+struct AliveGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+impl Drop for AliveGuard {
+    fn drop(&mut self) {
+        self.0
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
 
 async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Result<()> {
     let req = chain.rpc_ws_url.as_str().into_client_request()?;
@@ -656,8 +759,13 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
     });
     ws.send(Message::Text(sub.to_string().into())).await?;
     streaming_status(app, state, chain);
-    let mut last_price_at = std::time::Instant::now();
-    let mut current_price = state.prices.usd(&chain.coingecko_id).await;
+
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()?;
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(SUI_ENRICH_CONCURRENCY));
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let _alive_guard = AliveGuard(alive.clone());
 
     while let Some(msg) = ws.next().await {
         if *state.shutdown.read() {
@@ -674,14 +782,6 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
             Message::Close(_) => break,
             _ => continue,
         };
-        if last_price_at.elapsed() > Duration::from_secs(60) {
-            let p = state.prices.usd(&chain.coingecko_id).await;
-            if p > 0.0 {
-                current_price = p;
-            }
-            last_price_at = std::time::Instant::now();
-        }
-        let _ = current_price;
         let v: Value = match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(_) => continue,
@@ -697,37 +797,218 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
         if digest.is_empty() {
             continue;
         }
-        let sender = result
+        let sender_hint = result
             .pointer("/transaction/data/sender")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let tx_kind = result
-            .pointer("/transaction/data/transaction/kind")
-            .and_then(|v| v.as_str())
-            .unwrap_or("ProgrammableTransaction")
-            .to_string();
 
-        emit_tx(
-            app,
-            PendingTx {
-                chain: chain.id.clone(),
-                native_symbol: "SUI".into(),
-                hash: digest,
-                from: sender,
-                to: None,
-                value_wei: "0".into(),
-                value_native: 0.0,
-                value_usd: None,
-                gas_gwei: None,
-                gas_limit: None,
-                input: String::new(),
-                selector: None,
-                label: Some(format!("Sui: {tx_kind}")),
-                summary: None,
-                seen_at: now_millis(),
-            },
-        );
+        // Enrich asynchronously so a slow upstream doesn't stall the WS pump.
+        let app_c = app.clone();
+        let state_c = state.clone();
+        let chain_c = chain.clone();
+        let client_c = http_client.clone();
+        let sem = semaphore.clone();
+        let alive_c = alive.clone();
+        tokio::spawn(async move {
+            // Cheap check before queueing on the semaphore, so a long backlog
+            // doesn't keep flushing after the worker has already been torn down.
+            if !alive_c.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            let _permit = match sem.acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => return,
+            };
+            if !alive_c.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            let pt = sui_enrich(&client_c, &chain_c, &state_c, &digest, &sender_hint).await;
+            // Final check after the network round-trip — the worker may
+            // have been aborted while the HTTP call was in flight.
+            if !alive_c.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            emit_tx(&app_c, pt);
+        });
     }
     Ok(())
+}
+
+async fn sui_enrich(
+    client: &reqwest::Client,
+    chain: &ChainConfig,
+    state: &AppState,
+    digest: &str,
+    sender_hint: &str,
+) -> PendingTx {
+    let price = state.prices.usd(&chain.coingecko_id).await;
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "sui_getTransactionBlock",
+        "params": [
+            digest,
+            {
+                "showInput": true,
+                "showBalanceChanges": true,
+                "showEffects": true
+            }
+        ]
+    });
+
+    let resp = client
+        .post(chain.rpc_http_url.trim_end_matches('/'))
+        .json(&body)
+        .send()
+        .await;
+
+    let detail = match resp {
+        Ok(r) if r.status().is_success() => r.json::<Value>().await.ok(),
+        _ => None,
+    };
+
+    let detail = detail.unwrap_or(Value::Null);
+    let result = detail.get("result").cloned().unwrap_or(Value::Null);
+
+    let sender = result
+        .pointer("/transaction/data/sender")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| sender_hint.to_string());
+
+    // Find SUI delta on the sender. We pick the largest absolute outgoing
+    // amount (negative), which corresponds to "what was actually moved out".
+    let mut value_mist: i128 = 0;
+    let mut to_address: Option<String> = None;
+    if let Some(arr) = result.get("balanceChanges").and_then(|v| v.as_array()) {
+        let mut sender_outflow: i128 = 0;
+        let mut largest_recipient: Option<(i128, String)> = None;
+        for c in arr {
+            let coin = c
+                .get("coinType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if coin != SUI_COIN_TYPE {
+                continue;
+            }
+            let amount: i128 = c
+                .get("amount")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<i128>().ok())
+                .unwrap_or(0);
+            // owner can be {AddressOwner: "0x..."} | {ObjectOwner: ...} | "Immutable" | {Shared: ...}
+            let owner = c
+                .pointer("/owner/AddressOwner")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            if owner.as_deref() == Some(sender.as_str()) {
+                if amount < sender_outflow {
+                    sender_outflow = amount;
+                }
+            } else if amount > 0 {
+                if let Some(addr) = owner {
+                    let cur = largest_recipient
+                        .as_ref()
+                        .map(|(a, _)| *a)
+                        .unwrap_or(0);
+                    if amount > cur {
+                        largest_recipient = Some((amount, addr));
+                    }
+                }
+            }
+        }
+        value_mist = -sender_outflow;
+        to_address = largest_recipient.map(|(_, a)| a);
+    }
+    // 1 SUI = 1e9 mist
+    let value_native = value_mist as f64 / 1_000_000_000.0;
+    let value_usd = if price > 0.0 && value_native > 0.0 {
+        Some(value_native * price)
+    } else {
+        None
+    };
+
+    let label = sui_label(&result);
+
+    PendingTx {
+        chain: chain.id.clone(),
+        native_symbol: "SUI".into(),
+        hash: digest.to_string(),
+        from: sender,
+        to: to_address,
+        value_wei: value_mist.max(0).to_string(),
+        value_native,
+        value_usd,
+        gas_gwei: None,
+        gas_limit: result
+            .pointer("/effects/gasUsed/computationCost")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        input: String::new(),
+        selector: None,
+        label: Some(label),
+        summary: None,
+        seen_at: now_millis(),
+    }
+}
+
+fn sui_label(result: &Value) -> String {
+    // ProgrammableTransaction → look at the first MoveCall, if any, and
+    // map well-known package ids to friendly names.
+    let pt = result
+        .pointer("/transaction/data/transaction")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let kind = pt
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("ProgrammableTransaction");
+
+    if let Some(txs) = pt.get("transactions").and_then(|v| v.as_array()) {
+        for cmd in txs {
+            if let Some(call) = cmd.get("MoveCall") {
+                let pkg = call.get("package").and_then(|v| v.as_str()).unwrap_or("");
+                let module = call.get("module").and_then(|v| v.as_str()).unwrap_or("");
+                let function = call
+                    .get("function")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let pretty = sui_known_package(pkg);
+                if !pretty.is_empty() {
+                    return format!("Sui: {pretty} {function}").trim().into();
+                }
+                if !module.is_empty() {
+                    return format!("Sui: {module}::{function}");
+                }
+            }
+            if cmd.get("TransferObjects").is_some() {
+                return "Sui: TransferObjects".into();
+            }
+            if cmd.get("SplitCoins").is_some() {
+                return "Sui: SplitCoins".into();
+            }
+        }
+    }
+    if kind == "ProgrammableTransaction" {
+        return "Sui: ProgrammableTransaction".into();
+    }
+    format!("Sui: {kind}")
+}
+
+fn sui_known_package(pkg: &str) -> &'static str {
+    match pkg {
+        // Cetus AMM mainnet routers.
+        "0x1eabed72c53feb3805120a081dc15963c204dc8d091542592abaf7a35689b2fb" => "Cetus AMM",
+        "0x2eabed72c53feb3805120a081dc15963c204dc8d091542592abaf7a35689b2fb" => "Cetus Router",
+        // Bluefin Spot/Perps (well-known mainnet ids).
+        "0x3492c874c1e3b3e2984e8c41b589e642d4d0a5d6459e5a9cfc2d52fd7c89c267" => "Bluefin",
+        // DeepBook v2/v3.
+        "0x000000000000000000000000000000000000000000000000000000000000dee9" => "DeepBook",
+        // Suilend lending.
+        "0xf95b06141ed4a174f239417323bde3f209b972f5930d8521ea38a52aff3a6ddf" => "Suilend",
+        // Aftermath finance router.
+        "0xefe170ec0be4d762196bedecd7a065816576198a6527c99282a2551aaa7da38c" => "Aftermath",
+        _ => "",
+    }
 }
