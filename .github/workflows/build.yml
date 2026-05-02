@@ -94,6 +94,7 @@ jobs:
       - name: Tauri build
         env:
           GUMROAD_PRODUCT_PERMALINK: ${{ vars.GUMROAD_PRODUCT_PERMALINK }}
+          GUMROAD_PRODUCT_ID: ${{ vars.GUMROAD_PRODUCT_ID }}
         run: npx tauri build --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
