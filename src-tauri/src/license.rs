@@ -4,9 +4,6 @@ use serde::Deserialize;
 use std::time::Duration;
 
 const PRODUCT_PERMALINK: Option<&str> = option_env!("GUMROAD_PRODUCT_PERMALINK");
-// product_id is the base64 id shown in the Gumroad API error message.
-// Set via GUMROAD_PRODUCT_ID env var at build time.
-const PRODUCT_ID: Option<&str> = option_env!("GUMROAD_PRODUCT_ID");
 
 #[derive(Deserialize)]
 struct GumroadResponse {
@@ -48,23 +45,13 @@ pub async fn verify(key: &str) -> (bool, String) {
         Err(e) => return (false, format!("HTTP client init failed: {}", e)),
     };
 
-    // Build form params — include product_id if available (required by Gumroad API)
-    let mut params = vec![
-        ("product_permalink", permalink),
-        ("license_key", trimmed),
-        ("increment_uses_count", "false"),
-    ];
-    let product_id_val;
-    if let Some(pid) = PRODUCT_ID {
-        if !pid.is_empty() {
-            product_id_val = pid.to_string();
-            params.push(("product_id", &product_id_val));
-        }
-    }
-
     let resp = client
         .post("https://api.gumroad.com/v2/licenses/verify")
-        .form(&params)
+        .form(&[
+            ("product_permalink", permalink),
+            ("license_key", trimmed),
+            ("increment_uses_count", "false"),
+        ])
         .send()
         .await;
 
