@@ -12,7 +12,11 @@ use crate::simulate::SimulationResult;
 use crate::state::AppState;
 use crate::types::{AppSettings, ConnectionStatus, LicenseStatus};
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager,
+};
 
 #[tauri::command]
 fn get_settings(state: tauri::State<'_, AppState>) -> AppSettings {
@@ -118,11 +122,58 @@ fn license_status(state: tauri::State<'_, AppState>) -> LicenseStatus {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_tray::init())
         .setup(|app| {
             let settings_path = settings_path(app.handle());
             let state = AppState::new(settings_path);
             app.manage(state);
+
+            // Build tray icon menu
+            let show = MenuItem::with_id(app, "show", "Показать", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&menu)
+                .tooltip("MempoolPulse")
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    // Двойной клик по иконке трея — показать окно
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Перехватываем закрытие окна — сворачиваем в трей вместо выхода
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_settings,

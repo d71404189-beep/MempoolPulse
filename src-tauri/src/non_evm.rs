@@ -770,6 +770,55 @@ fn sui_label_from_kind(tx_kind: &str, modules: &[String]) -> String {
 }
 
 async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Result<()> {
+    // HTTP client used both for follow-up enrichment and HTTP-polling fallback
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let http_url = chain.rpc_http_url.clone();
+
+    // Try WebSocket first. If the public node doesn't support
+    // suix_subscribeTransaction (deprecated in newer Sui protocol versions)
+    // or refuses the connection, fall back to HTTP polling via
+    // suix_queryTransactionBlocks — same approach as TRON/TON workers.
+    let ws_url = chain.rpc_ws_url.clone();
+    let ws_available = if ws_url.is_empty() {
+        false
+    } else {
+        match chain.rpc_ws_url.as_str().into_client_request() {
+            Ok(req) => {
+                match tokio::time::timeout(
+                    Duration::from_secs(8),
+                    tokio_tungstenite::connect_async(req),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => true,
+                    _ => false,
+                }
+            }
+            Err(_) => false,
+        }
+    };
+
+    if ws_available {
+        run_sui_ws(app, state, chain, &http_client, &http_url).await
+    } else {
+        // No usable WebSocket — fall back to HTTP polling
+        if http_url.is_empty() {
+            return Err(anyhow!("Sui: no usable RPC (ws failed, http_url empty)"));
+        }
+        run_sui_http(app, state, chain, &http_client, &http_url).await
+    }
+}
+
+/// Sui worker: WebSocket path — suix_subscribeTransaction + enrichment calls.
+async fn run_sui_ws(
+    app: &AppHandle,
+    state: &AppState,
+    chain: &ChainConfig,
+    http_client: &reqwest::Client,
+    http_url: &str,
+) -> Result<()> {
     let req = chain.rpc_ws_url.as_str().into_client_request()?;
     let (mut ws, _) = tokio_tungstenite::connect_async(req)
         .await
@@ -785,12 +834,6 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
     streaming_status(app, state, chain);
     let mut last_price_at = std::time::Instant::now();
     let mut current_price = state.prices.usd(&chain.coingecko_id).await;
-
-    // HTTP client for follow-up sui_getTransactionBlock calls
-    let http_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()?;
-    let http_url = chain.rpc_http_url.clone();
 
     while let Some(msg) = ws.next().await {
         if *state.shutdown.read() {
@@ -830,7 +873,6 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
             continue;
         }
 
-        // Extract sender from subscription result
         let sender = result
             .pointer("/transaction/data/sender")
             .and_then(|v| v.as_str())
@@ -842,105 +884,244 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
             .unwrap_or("ProgrammableTransaction")
             .to_string();
 
-        // v1.6.1: Follow-up call to get balance changes and Move modules
-        // Use showBalanceChanges + showInput to decode value and label
-        let (value_sui, value_usd_opt, label, to_addr) = if !http_url.is_empty() {
-            let body = json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "sui_getTransactionBlock",
-                "params": [
-                    digest,
-                    {
-                        "showInput": true,
-                        "showBalanceChanges": true,
-                        "showEffects": false,
-                        "showEvents": false,
-                        "showObjectChanges": false
-                    }
-                ]
-            });
-            match http_client.post(&http_url).json(&body).send().await {
-                Ok(resp) => {
-                    if let Ok(data) = resp.json::<Value>().await {
-                        let tx_result = data.get("result").cloned().unwrap_or(Value::Null);
+        let (value_sui, value_usd_opt, label, to_addr) =
+            sui_enrich(http_client, http_url, &digest, &tx_kind, current_price).await;
 
-                        // Extract balance changes to find SUI amount and recipient
-                        let mut max_sui_change: f64 = 0.0;
-                        let mut recipient: Option<String> = None;
-                        if let Some(changes) = tx_result.get("balanceChanges").and_then(|v| v.as_array()) {
-                            for change in changes {
-                                let coin_type = change.get("coinType").and_then(|v| v.as_str()).unwrap_or("");
-                                if coin_type.contains("0x2::sui::SUI") {
-                                    let amount_str = change.get("amount").and_then(|v| v.as_str()).unwrap_or("0");
-                                    let amount: i64 = amount_str.parse().unwrap_or(0);
-                                    // Positive change = receiver
-                                    if amount > 0 {
-                                        let sui_val = amount as f64 / 1_000_000_000.0;
-                                        if sui_val > max_sui_change {
-                                            max_sui_change = sui_val;
-                                            recipient = change.get("owner")
-                                                .and_then(|o| o.get("AddressOwner"))
-                                                .and_then(|v| v.as_str())
-                                                .map(|s| s.to_string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Extract Move module names for label decoding
-                        let mut modules: Vec<String> = Vec::new();
-                        if let Some(txs) = tx_result.pointer("/transaction/data/transaction/transactions").and_then(|v| v.as_array()) {
-                            for tx_call in txs {
-                                if let Some(mv) = tx_call.get("MoveCall") {
-                                    let pkg = mv.get("package").and_then(|v| v.as_str()).unwrap_or("");
-                                    let module = mv.get("module").and_then(|v| v.as_str()).unwrap_or("");
-                                    let func = mv.get("function").and_then(|v| v.as_str()).unwrap_or("");
-                                    modules.push(format!("{}::{}::{}", pkg, module, func));
-                                }
-                            }
-                        }
-
-                        let label = sui_label_from_kind(&tx_kind, &modules);
-                        let usd = if current_price > 0.0 && max_sui_change > 0.0 {
-                            Some(max_sui_change * current_price)
-                        } else {
-                            None
-                        };
-                        (max_sui_change, usd, label, recipient)
-                    } else {
-                        (0.0, None, format!("Sui: {tx_kind}"), None)
-                    }
-                }
-                Err(_) => (0.0, None, format!("Sui: {tx_kind}"), None),
-            }
-        } else {
-            (0.0, None, format!("Sui: {tx_kind}"), None)
-        };
-
-        let mist = (value_sui * 1_000_000_000.0) as u64;
-
-        emit_tx(
-            app,
-            PendingTx {
-                chain: chain.id.clone(),
-                native_symbol: "SUI".into(),
-                hash: digest,
-                from: sender,
-                to: to_addr,
-                value_wei: mist.to_string(),
-                value_native: value_sui,
-                value_usd: value_usd_opt,
-                gas_gwei: None,
-                gas_limit: None,
-                input: String::new(),
-                selector: None,
-                label: Some(label),
-                summary: None,
-                seen_at: now_millis(),
-            },
-        );
+        sui_emit(app, chain, digest, sender, to_addr, value_sui, value_usd_opt, label);
     }
     Ok(())
+}
+
+/// Sui worker: HTTP-polling fallback.
+/// Uses suix_queryTransactionBlocks to poll recent transactions every 3s.
+/// This mirrors the TRON/TON polling approach and works on any public node.
+async fn run_sui_http(
+    app: &AppHandle,
+    state: &AppState,
+    chain: &ChainConfig,
+    http_client: &reqwest::Client,
+    http_url: &str,
+) -> Result<()> {
+    streaming_status(app, state, chain);
+    let mut last_price_at = std::time::Instant::now();
+    let mut current_price = state.prices.usd(&chain.coingecko_id).await;
+    let mut seen: HashSet<String> = HashSet::new();
+    // Bootstrap: fetch the latest cursor so we don't replay old history
+    let mut cursor: Option<String> = sui_latest_cursor(http_client, http_url).await;
+
+    loop {
+        if *state.shutdown.read() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        if *state.shutdown.read() {
+            return Ok(());
+        }
+        if last_price_at.elapsed() > Duration::from_secs(60) {
+            let p = state.prices.usd(&chain.coingecko_id).await;
+            if p > 0.0 {
+                current_price = p;
+            }
+            last_price_at = std::time::Instant::now();
+        }
+
+        // Query up to 20 recent transactions after our cursor
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "suix_queryTransactionBlocks",
+            "params": [
+                {"All": []},
+                cursor,
+                20,
+                false
+            ]
+        });
+        let resp = match http_client.post(http_url).json(&body).send().await {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let data: Value = match resp.json().await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let items = match data.pointer("/result/data").and_then(|v| v.as_array()) {
+            Some(a) => a.clone(),
+            None => continue,
+        };
+        // Advance cursor to the latest item
+        if let Some(next_cursor) = data.pointer("/result/nextCursor").and_then(|v| v.as_str()) {
+            if !next_cursor.is_empty() {
+                cursor = Some(next_cursor.to_string());
+            }
+        }
+
+        // Prune seen set so it doesn't grow unbounded
+        if seen.len() > 2000 {
+            seen.clear();
+        }
+
+        for item in &items {
+            let digest = match item.get("digest").and_then(|v| v.as_str()) {
+                Some(d) => d.to_string(),
+                None => continue,
+            };
+            if seen.contains(&digest) {
+                continue;
+            }
+            seen.insert(digest.clone());
+
+            let tx_kind = item
+                .pointer("/transaction/data/transaction/kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("ProgrammableTransaction")
+                .to_string();
+            let sender = item
+                .pointer("/transaction/data/sender")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let (value_sui, value_usd_opt, label, to_addr) =
+                sui_enrich(http_client, http_url, &digest, &tx_kind, current_price).await;
+
+            sui_emit(app, chain, digest, sender, to_addr, value_sui, value_usd_opt, label);
+        }
+    }
+}
+
+/// Fetch the latest transaction digest to use as a starting cursor, so the
+/// HTTP-polling worker doesn't replay old history on startup.
+async fn sui_latest_cursor(http_client: &reqwest::Client, http_url: &str) -> Option<String> {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "suix_queryTransactionBlocks",
+        "params": [{"All": []}, null, 1, true]
+    });
+    let resp = http_client.post(http_url).json(&body).send().await.ok()?;
+    let data: Value = resp.json().await.ok()?;
+    data.pointer("/result/data/0/digest")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Enrich a Sui transaction digest with balance changes and Move module labels
+/// via a follow-up sui_getTransactionBlock HTTP call.
+async fn sui_enrich(
+    http_client: &reqwest::Client,
+    http_url: &str,
+    digest: &str,
+    tx_kind: &str,
+    current_price: f64,
+) -> (f64, Option<f64>, String, Option<String>) {
+    if http_url.is_empty() {
+        return (0.0, None, format!("Sui: {tx_kind}"), None);
+    }
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "sui_getTransactionBlock",
+        "params": [
+            digest,
+            {
+                "showInput": true,
+                "showBalanceChanges": true,
+                "showEffects": false,
+                "showEvents": false,
+                "showObjectChanges": false
+            }
+        ]
+    });
+    match http_client.post(http_url).json(&body).send().await {
+        Ok(resp) => {
+            if let Ok(data) = resp.json::<Value>().await {
+                let tx_result = data.get("result").cloned().unwrap_or(Value::Null);
+
+                let mut max_sui_change: f64 = 0.0;
+                let mut recipient: Option<String> = None;
+                if let Some(changes) = tx_result.get("balanceChanges").and_then(|v| v.as_array()) {
+                    for change in changes {
+                        let coin_type = change.get("coinType").and_then(|v| v.as_str()).unwrap_or("");
+                        if coin_type.contains("0x2::sui::SUI") {
+                            let amount_str = change.get("amount").and_then(|v| v.as_str()).unwrap_or("0");
+                            let amount: i64 = amount_str.parse().unwrap_or(0);
+                            if amount > 0 {
+                                let sui_val = amount as f64 / 1_000_000_000.0;
+                                if sui_val > max_sui_change {
+                                    max_sui_change = sui_val;
+                                    recipient = change
+                                        .get("owner")
+                                        .and_then(|o| o.get("AddressOwner"))
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let mut modules: Vec<String> = Vec::new();
+                if let Some(txs) = tx_result
+                    .pointer("/transaction/data/transaction/transactions")
+                    .and_then(|v| v.as_array())
+                {
+                    for tx_call in txs {
+                        if let Some(mv) = tx_call.get("MoveCall") {
+                            let pkg = mv.get("package").and_then(|v| v.as_str()).unwrap_or("");
+                            let module = mv.get("module").and_then(|v| v.as_str()).unwrap_or("");
+                            let func = mv.get("function").and_then(|v| v.as_str()).unwrap_or("");
+                            modules.push(format!("{}::{}::{}", pkg, module, func));
+                        }
+                    }
+                }
+
+                let label = sui_label_from_kind(tx_kind, &modules);
+                let usd = if current_price > 0.0 && max_sui_change > 0.0 {
+                    Some(max_sui_change * current_price)
+                } else {
+                    None
+                };
+                (max_sui_change, usd, label, recipient)
+            } else {
+                (0.0, None, format!("Sui: {tx_kind}"), None)
+            }
+        }
+        Err(_) => (0.0, None, format!("Sui: {tx_kind}"), None),
+    }
+}
+
+/// Emit a single Sui PendingTx event to the frontend.
+fn sui_emit(
+    app: &AppHandle,
+    chain: &ChainConfig,
+    digest: String,
+    sender: String,
+    to_addr: Option<String>,
+    value_sui: f64,
+    value_usd_opt: Option<f64>,
+    label: String,
+) {
+    let mist = (value_sui * 1_000_000_000.0) as u64;
+    emit_tx(
+        app,
+        PendingTx {
+            chain: chain.id.clone(),
+            native_symbol: "SUI".into(),
+            hash: digest,
+            from: sender,
+            to: to_addr,
+            value_wei: mist.to_string(),
+            value_native: value_sui,
+            value_usd: value_usd_opt,
+            gas_gwei: None,
+            gas_limit: None,
+            input: String::new(),
+            selector: None,
+            label: Some(label),
+            summary: None,
+            seen_at: now_millis(),
+        },
+    );
 }

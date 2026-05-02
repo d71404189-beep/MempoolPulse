@@ -1,6 +1,6 @@
 [package]
 name = "mempoolpulse"
-version = "1.6.1"
+version = "1.7.0"
 description = "Real-time mempool monitor across 12 chains: Ethereum, Arbitrum, Base, BNB Chain, Polygon, Optimism, Avalanche, Bitcoin, Solana, TRON, TON, Sui — with anvil-based pre-confirmation tx simulation."
 authors = ["MempoolPulse"]
 edition = "2021"
@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-tray = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "process", "io-util"] }
