@@ -137,7 +137,6 @@ fn license_status(state: tauri::State<'_, AppState>) -> LicenseStatus {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_tray::init())
         .setup(|app| {
             let settings_path = settings_path(app.handle());
             let state = AppState::new(settings_path);
