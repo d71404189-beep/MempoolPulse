@@ -64,10 +64,35 @@ export default function App() {
   useEffect(() => {
     if (!settings) return;
     const cap = Math.max(50, settings.filters.buffer_size || 500);
+    // Per-chain cap: each chain gets at most this fraction of the total buffer.
+    // This prevents high-volume chains (Solana ~2-3k tx/s) from crowding out
+    // lower-volume ones (Ethereum, TON, etc.).
+    const perChainCap = Math.max(20, Math.floor(cap / 4));
 
     const unlistenPending = listen<PendingTx>("mempool://pending", (event) => {
       const tx = event.payload;
+      // Apply min_value filters before adding to list.
+      // For non-EVM chains (Solana etc.) value_usd may be null — if a USD
+      // threshold is set we skip txs where the value is unknown or below it.
+      const sf = settingsRef.current;
+      if (sf) {
+        const minUsd = sf.filters.min_value_usd ?? 0;
+        const minNative = sf.filters.min_value_eth ?? 0;
+        if (minUsd > 0 && (tx.value_usd == null || tx.value_usd < minUsd)) return;
+        if (minNative > 0 && tx.value_native < minNative) return;
+      }
       setTxs((current) => {
+        // Count how many txs this chain already has in the buffer
+        const chainCount = current.filter((t) => t.chain === tx.chain).length;
+        if (chainCount >= perChainCap) {
+          // Remove the oldest tx from this chain to make room
+          const oldestIdx = current.map((t, i) => ({ chain: t.chain, i }))
+            .reverse()
+            .find((x) => x.chain === tx.chain)?.i;
+          const next = [tx, ...current.filter((_, i) => i !== oldestIdx)];
+          if (next.length > cap) next.length = cap;
+          return next;
+        }
         const next = [tx, ...current];
         if (next.length > cap) next.length = cap;
         return next;
