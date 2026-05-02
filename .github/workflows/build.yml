@@ -89,9 +89,21 @@ jobs:
           TAG="${{ github.ref_name }}"
           VERSION=$(echo "$TAG" | sed 's/^v//' | sed 's/-.*//')
           echo "Setting version to $VERSION"
-          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
-          sed -i "0,/^version = .*/s/^version = .*/version = \"$VERSION\"/" src-tauri/Cargo.toml
-          echo "tauri.conf.json version: $(grep version src-tauri/tauri.conf.json)"
+          # Use Python for cross-platform (macOS sed differs from GNU sed)
+          python3 -c "
+import re, sys
+v = '$VERSION'
+# patch tauri.conf.json
+with open('src-tauri/tauri.conf.json', 'r') as f: c = f.read()
+c = re.sub(r'"version": "[^"]+"', f'"version": "{v}"', c)
+with open('src-tauri/tauri.conf.json', 'w') as f: f.write(c)
+# patch Cargo.toml (first occurrence only)
+with open('src-tauri/Cargo.toml', 'r') as f: c = f.read()
+c = re.sub(r'^version = "[^"]+"', f'version = "{v}"', c, count=1, flags=re.MULTILINE)
+with open('src-tauri/Cargo.toml', 'w') as f: f.write(c)
+print('Done:', v)
+"
+          grep '"version"' src-tauri/tauri.conf.json
       - name: Tauri build
         env:
           GUMROAD_PRODUCT_PERMALINK: ${{ vars.GUMROAD_PRODUCT_PERMALINK }}
