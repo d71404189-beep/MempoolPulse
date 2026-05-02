@@ -268,6 +268,13 @@ pub struct AppSettings {
     pub chains: Vec<ChainConfig>,
     /// Saved license key from Gumroad. Empty if not yet activated.
     pub license_key: String,
+    /// SHA-256 hardware fingerprint of the machine that activated this key.
+    /// Empty until first activation. On startup, if current HWID differs from
+    /// this value the app demands re-activation (which increments uses_count
+    /// on Gumroad — set max to 2 in your Gumroad product settings to allow
+    /// one reinstall/upgrade before blocking the key).
+    #[serde(default)]
+    pub activated_hwid: String,
     /// Optional per-user nickname displayed in notifications.
     pub display_name: String,
     /// UI language preference: "auto" (default, follows system locale), "en", or "ru".
@@ -296,6 +303,7 @@ impl Default for AppSettings {
             rpc_http_url: String::new(),
             chains: ChainConfig::defaults(),
             license_key: String::new(),
+            activated_hwid: String::new(),
             display_name: String::new(),
             language: default_language(),
             filters: Filters::default(),

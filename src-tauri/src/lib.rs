@@ -72,12 +72,19 @@ async fn verify_license(
     key: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<LicenseStatus, String> {
-    let (valid, message) = license::verify(&key).await;
-    if valid {
-        state.settings.write().license_key = key;
+    let saved_hwid = state.settings.read().activated_hwid.clone();
+    let result = license::verify(&key, &saved_hwid).await;
+    if result.valid {
+        let mut s = state.settings.write();
+        s.license_key = key;
+        s.activated_hwid = result.hwid.clone();
+        drop(s);
         let _ = state.save_settings();
     }
-    Ok(LicenseStatus { valid, message })
+    Ok(LicenseStatus {
+        valid: result.valid,
+        message: result.message,
+    })
 }
 
 #[tauri::command]
@@ -107,13 +114,21 @@ async fn simulate_tx(
 
 #[tauri::command]
 fn license_status(state: tauri::State<'_, AppState>) -> LicenseStatus {
-    let key = state.settings.read().license_key.clone();
+    let s = state.settings.read();
+    let (valid, needs_reactivation) =
+        license::local_check(&s.license_key, &s.activated_hwid);
+    if needs_reactivation {
+        return LicenseStatus {
+            valid: false,
+            message: "hardware_changed".into(),
+        };
+    }
     LicenseStatus {
-        valid: !key.is_empty(),
-        message: if key.is_empty() {
-            "No license key saved.".into()
+        valid,
+        message: if valid {
+            "License active.".into()
         } else {
-            "License key present.".into()
+            "No license key saved.".into()
         },
     }
 }

@@ -20,6 +20,7 @@ type Tab = "live" | "settings";
 
 export default function App() {
   const [licensed, setLicensed] = useState<boolean | null>(null);
+  const [hardwareChanged, setHardwareChanged] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [tab, setTab] = useState<Tab>("live");
   const [txs, setTxs] = useState<PendingTx[]>([]);
@@ -49,6 +50,9 @@ export default function App() {
     void (async () => {
       const license: LicenseStatus = await invoke("license_status");
       setLicensed(license.valid);
+      if (!license.valid && license.message === "hardware_changed") {
+        setHardwareChanged(true);
+      }
       const s: AppSettings = await invoke("get_settings");
       setSettings(s);
       const conns: ConnectionStatus[] = await invoke("connection_status");
@@ -180,7 +184,7 @@ export default function App() {
   }
 
   if (!licensed) {
-    return <LicenseGate onActivated={handleLicensed} lang={lang} />;
+    return <LicenseGate onActivated={handleLicensed} lang={lang} hardwareChanged={hardwareChanged} />;
   }
 
   return (
