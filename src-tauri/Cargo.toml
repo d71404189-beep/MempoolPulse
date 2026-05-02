@@ -1,6 +1,6 @@
 [package]
 name = "mempoolpulse"
-version = "1.7.0"
+version = "1.7.1"
 description = "Real-time mempool monitor across 12 chains: Ethereum, Arbitrum, Base, BNB Chain, Polygon, Optimism, Avalanche, Bitcoin, Solana, TRON, TON, Sui — with anvil-based pre-confirmation tx simulation."
 authors = ["MempoolPulse"]
 edition = "2021"
@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -28,9 +28,7 @@ chrono = { version = "0.4", features = ["serde"] }
 parking_lot = "0.12"
 url = "2.5"
 once_cell = "1"
-# Hardware ID fingerprinting
-sysinfo = { version = "0.33", default-features = false, features = ["system"] }
-sha2 = "0.10"
+# Anvil bundle download / extraction for the v1.5 simulate-tx feature.
 flate2 = "1"
 tar = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
