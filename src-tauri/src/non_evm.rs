@@ -548,7 +548,7 @@ fn tron_tx_to_pending(tx: &Value, chain: &ChainConfig, price_usd: f64) -> Option
 }
 
 // --------------------------------------------------------------------------
-// TON — Toncenter v2 polling (no public WebSocket on the free endpoint)
+// TON — Toncenter v2 polling with getBlockTransactionsExt for native value
 // --------------------------------------------------------------------------
 
 async fn run_ton(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Result<()> {
@@ -560,8 +560,6 @@ async fn run_ton(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
     let mut last_price_at = std::time::Instant::now();
     let mut current_price = state.prices.usd(&chain.coingecko_id).await;
 
-    // Bootstrap: walk getMasterchainInfo → getBlockTransactions to get a
-    // baseline `lt` we'll consider "already seen", then start polling.
     let base = chain.rpc_http_url.trim_end_matches('/');
     loop {
         if *state.shutdown.read() {
@@ -575,31 +573,49 @@ async fn run_ton(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
             last_price_at = std::time::Instant::now();
         }
 
-        // Pull the latest master-chain transactions across the recent block.
-        // Toncenter exposes /getRecentTransactions; we use it as a stream
-        // proxy. On rate-limit (429) we just back off and retry.
         let url = format!("{}/getMasterchainInfo", base);
-        let info: Value = client.get(&url).send().await?.json().await?;
-        let last_seqno = info
-            .pointer("/result/last/seqno")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| anyhow!("toncenter: no master seqno"))?;
+        let info: Value = match client.get(&url).send().await {
+            Ok(r) => match r.json().await {
+                Ok(v) => v,
+                Err(_) => { tokio::time::sleep(Duration::from_secs(5)).await; continue; }
+            },
+            Err(_) => { tokio::time::sleep(Duration::from_secs(5)).await; continue; }
+        };
+        let last_seqno = match info.pointer("/result/last/seqno").and_then(|v| v.as_u64()) {
+            Some(s) => s,
+            None => { tokio::time::sleep(Duration::from_secs(5)).await; continue; }
+        };
         let workchain = -1i32;
-        let shard = "-9223372036854775808"; // 0x8000000000000000 master shard
+        let shard = "-9223372036854775808";
 
+        // v1.6.1: Use getBlockTransactionsExt which returns full tx details
+        // including in_msg.value (nanotons) — no extra RPC call needed.
         let txs_url = format!(
-            "{}/getBlockTransactions?workchain={}&shard={}&seqno={}&count=40",
+            "{}/getBlockTransactionsExt?workchain={}&shard={}&seqno={}&count=40",
             base, workchain, shard, last_seqno
         );
-        let blk: Value = client.get(&txs_url).send().await?.json().await?;
+        let blk: Value = match client.get(&txs_url).send().await {
+            Ok(r) => match r.json().await {
+                Ok(v) => v,
+                Err(_) => { tokio::time::sleep(Duration::from_secs(5)).await; continue; }
+            },
+            Err(_) => { tokio::time::sleep(Duration::from_secs(5)).await; continue; }
+        };
+
         if let Some(arr) = blk.pointer("/result/transactions").and_then(|v| v.as_array()) {
             for t in arr {
-                let lt = t.get("lt").and_then(|v| v.as_str()).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                let lt = t
+                    .get("transaction_id")
+                    .and_then(|v| v.get("lt"))
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .or_else(|| t.get("lt").and_then(|v| v.as_u64()))
+                    .unwrap_or(0);
                 if lt <= last_lt {
                     continue;
                 }
                 if last_lt > 0 {
-                    if let Some(pt) = ton_tx_to_pending(t, chain, current_price) {
+                    if let Some(pt) = ton_tx_to_pending_ext(t, chain, current_price) {
                         emit_tx(app, pt);
                     }
                 }
@@ -612,35 +628,146 @@ async fn run_ton(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
     }
 }
 
-fn ton_tx_to_pending(t: &Value, chain: &ChainConfig, _price_usd: f64) -> Option<PendingTx> {
-    let hash = t.get("hash").and_then(|v| v.as_str())?.to_string();
-    let account = t
+/// Decode TON opcode → human-readable label.
+/// Covers standard jetton/NFT/DEX opcodes used by the TON ecosystem.
+fn ton_decode_opcode(opcode: u32) -> Option<&'static str> {
+    match opcode {
+        0x0f8a7ea5 => Some("Jetton transfer"),
+        0x178d4519 => Some("Jetton transfer notification"),
+        0x7362d09c => Some("Jetton transfer notification (alt)"),
+        0x595f07bc => Some("Jetton burn"),
+        0x5fcc3d14 => Some("NFT transfer"),
+        0x693d3950 => Some("NFT get static data"),
+        0x2fcb26a2 => Some("NFT get static data response"),
+        0x05138d91 => Some("NFT ownership assigned"),
+        0x5b0f2bc => Some("Getgems NFT sale"),
+        0x25938561 => Some("STON.fi swap"),
+        0xfcf9e58f => Some("STON.fi provide liquidity"),
+        0x6664de2a => Some("DeDust swap"),
+        0xd55e4686 => Some("DeDust deposit"),
+        0x0000000 => Some("TON transfer"),
+        _ => None,
+    }
+}
+
+/// Build a PendingTx from a getBlockTransactionsExt response entry.
+/// Extracts in_msg.value for native TON amount and decodes message opcode.
+fn ton_tx_to_pending_ext(t: &Value, chain: &ChainConfig, price_usd: f64) -> Option<PendingTx> {
+    let hash = t
+        .get("transaction_id")
+        .and_then(|v| v.get("hash"))
+        .and_then(|v| v.as_str())
+        .or_else(|| t.get("hash").and_then(|v| v.as_str()))?
+        .to_string();
+
+    // account = "from" address in user-friendly base64 format
+    let from = t
         .get("account")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    // in_msg carries the incoming message with value and destination
+    let in_msg = t.get("in_msg").cloned().unwrap_or(Value::Null);
+
+    // Destination address from in_msg.destination
+    let to = in_msg
+        .get("destination")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    // Native value: in_msg.value is nanotons (string)
+    let nanotons: u64 = in_msg
+        .get("value")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
+        .or_else(|| in_msg.get("value").and_then(|v| v.as_u64()))
+        .unwrap_or(0);
+    let value_ton = nanotons as f64 / 1_000_000_000.0;
+    let value_usd = if price_usd > 0.0 && value_ton > 0.0 {
+        Some(value_ton * price_usd)
+    } else {
+        None
+    };
+
+    // Decode message body opcode for human-readable label
+    let msg_body = in_msg.get("msg_data").or_else(|| in_msg.get("body"));
+    let opcode: Option<u32> = msg_body
+        .and_then(|b| b.get("body"))
+        .and_then(|v| v.as_str())
+        .and_then(|hex| {
+            let hex = hex.trim_start_matches("0x");
+            if hex.len() >= 8 {
+                u32::from_str_radix(&hex[..8], 16).ok()
+            } else {
+                None
+            }
+        });
+
+    let label = opcode
+        .and_then(ton_decode_opcode)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            // Fallback: classify by msg_type
+            let msg_type = in_msg.get("msg_type").and_then(|v| v.as_str()).unwrap_or("");
+            match msg_type {
+                "ext_in_msg_info" => "TON external call".to_string(),
+                "int_msg_info" if nanotons > 0 => "TON transfer".to_string(),
+                _ => "TON message".to_string(),
+            }
+        });
+
     Some(PendingTx {
         chain: chain.id.clone(),
         native_symbol: "TON".into(),
         hash,
-        from: account,
-        to: None,
-        value_wei: "0".into(),
-        value_native: 0.0,
-        value_usd: None,
+        from,
+        to,
+        value_wei: nanotons.to_string(),
+        value_native: value_ton,
+        value_usd,
         gas_gwei: None,
         gas_limit: None,
         input: String::new(),
         selector: None,
-        label: Some("TON message".into()),
+        label: Some(label),
         summary: None,
         seen_at: now_millis(),
     })
 }
 
 // --------------------------------------------------------------------------
-// Sui — Mysten WebSocket subscribeTransaction
+// Sui — Mysten WebSocket subscribeTransaction + follow-up for balance changes
 // --------------------------------------------------------------------------
+
+/// Map well-known Sui Move modules to human-readable labels.
+fn sui_label_from_kind(tx_kind: &str, modules: &[String]) -> String {
+    // First try to identify by well-known module names
+    for m in modules {
+        let label = match m.as_str() {
+            s if s.contains("0x2::sui") => "SUI transfer",
+            s if s.contains("cetus") => "Cetus AMM swap",
+            s if s.contains("deepbook") => "DeepBook order",
+            s if s.contains("bluefin") => "Bluefin perps",
+            s if s.contains("navi") => "Navi lending",
+            s if s.contains("turbos") => "Turbos DEX",
+            s if s.contains("aftermath") => "Aftermath DEX",
+            s if s.contains("staking") || s.contains("validator") => "Sui staking",
+            s if s.contains("kiosk") => "Kiosk NFT",
+            s if s.contains("coin") => "Coin operation",
+            _ => continue,
+        };
+        return label.to_string();
+    }
+    // Fallback to tx kind
+    match tx_kind {
+        "ProgrammableTransaction" => "Sui programmable tx".to_string(),
+        "ChangeEpoch" => "Sui epoch change".to_string(),
+        "Genesis" => "Sui genesis".to_string(),
+        other => format!("Sui: {other}"),
+    }
+}
 
 async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Result<()> {
     let req = chain.rpc_ws_url.as_str().into_client_request()?;
@@ -658,6 +785,12 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
     streaming_status(app, state, chain);
     let mut last_price_at = std::time::Instant::now();
     let mut current_price = state.prices.usd(&chain.coingecko_id).await;
+
+    // HTTP client for follow-up sui_getTransactionBlock calls
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let http_url = chain.rpc_http_url.clone();
 
     while let Some(msg) = ws.next().await {
         if *state.shutdown.read() {
@@ -681,7 +814,6 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
             }
             last_price_at = std::time::Instant::now();
         }
-        let _ = current_price;
         let v: Value = match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(_) => continue,
@@ -697,6 +829,8 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
         if digest.is_empty() {
             continue;
         }
+
+        // Extract sender from subscription result
         let sender = result
             .pointer("/transaction/data/sender")
             .and_then(|v| v.as_str())
@@ -708,6 +842,85 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
             .unwrap_or("ProgrammableTransaction")
             .to_string();
 
+        // v1.6.1: Follow-up call to get balance changes and Move modules
+        // Use showBalanceChanges + showInput to decode value and label
+        let (value_sui, value_usd_opt, label, to_addr) = if !http_url.is_empty() {
+            let body = json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "sui_getTransactionBlock",
+                "params": [
+                    digest,
+                    {
+                        "showInput": true,
+                        "showBalanceChanges": true,
+                        "showEffects": false,
+                        "showEvents": false,
+                        "showObjectChanges": false
+                    }
+                ]
+            });
+            match http_client.post(&http_url).json(&body).send().await {
+                Ok(resp) => {
+                    if let Ok(data) = resp.json::<Value>().await {
+                        let tx_result = data.get("result").cloned().unwrap_or(Value::Null);
+
+                        // Extract balance changes to find SUI amount and recipient
+                        let mut max_sui_change: f64 = 0.0;
+                        let mut recipient: Option<String> = None;
+                        if let Some(changes) = tx_result.get("balanceChanges").and_then(|v| v.as_array()) {
+                            for change in changes {
+                                let coin_type = change.get("coinType").and_then(|v| v.as_str()).unwrap_or("");
+                                if coin_type.contains("0x2::sui::SUI") {
+                                    let amount_str = change.get("amount").and_then(|v| v.as_str()).unwrap_or("0");
+                                    let amount: i64 = amount_str.parse().unwrap_or(0);
+                                    // Positive change = receiver
+                                    if amount > 0 {
+                                        let sui_val = amount as f64 / 1_000_000_000.0;
+                                        if sui_val > max_sui_change {
+                                            max_sui_change = sui_val;
+                                            recipient = change.get("owner")
+                                                .and_then(|o| o.get("AddressOwner"))
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Extract Move module names for label decoding
+                        let mut modules: Vec<String> = Vec::new();
+                        if let Some(txs) = tx_result.pointer("/transaction/data/transaction/transactions").and_then(|v| v.as_array()) {
+                            for tx_call in txs {
+                                if let Some(mv) = tx_call.get("MoveCall") {
+                                    let pkg = mv.get("package").and_then(|v| v.as_str()).unwrap_or("");
+                                    let module = mv.get("module").and_then(|v| v.as_str()).unwrap_or("");
+                                    let func = mv.get("function").and_then(|v| v.as_str()).unwrap_or("");
+                                    modules.push(format!("{}::{}::{}", pkg, module, func));
+                                }
+                            }
+                        }
+
+                        let label = sui_label_from_kind(&tx_kind, &modules);
+                        let usd = if current_price > 0.0 && max_sui_change > 0.0 {
+                            Some(max_sui_change * current_price)
+                        } else {
+                            None
+                        };
+                        (max_sui_change, usd, label, recipient)
+                    } else {
+                        (0.0, None, format!("Sui: {tx_kind}"), None)
+                    }
+                }
+                Err(_) => (0.0, None, format!("Sui: {tx_kind}"), None),
+            }
+        } else {
+            (0.0, None, format!("Sui: {tx_kind}"), None)
+        };
+
+        let mist = (value_sui * 1_000_000_000.0) as u64;
+
         emit_tx(
             app,
             PendingTx {
@@ -715,15 +928,15 @@ async fn run_sui(app: &AppHandle, state: &AppState, chain: &ChainConfig) -> Resu
                 native_symbol: "SUI".into(),
                 hash: digest,
                 from: sender,
-                to: None,
-                value_wei: "0".into(),
-                value_native: 0.0,
-                value_usd: None,
+                to: to_addr,
+                value_wei: mist.to_string(),
+                value_native: value_sui,
+                value_usd: value_usd_opt,
                 gas_gwei: None,
                 gas_limit: None,
                 input: String::new(),
                 selector: None,
-                label: Some(format!("Sui: {tx_kind}")),
+                label: Some(label),
                 summary: None,
                 seen_at: now_millis(),
             },
