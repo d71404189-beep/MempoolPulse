@@ -89,23 +89,8 @@ jobs:
           TAG="${{ github.ref_name }}"
           VERSION=$(echo "$TAG" | sed 's/^v//' | sed 's/-.*//')
           echo "Setting version to $VERSION"
-          cat > /tmp/sync_version.py << HEREDOC
-import re, sys
-v = sys.argv[1]
-with open('src-tauri/tauri.conf.json', 'r') as f:
-    c = f.read()
-c = re.sub(r'"version": "[^"]+"', f'"version": "{v}"', c)
-with open('src-tauri/tauri.conf.json', 'w') as f:
-    f.write(c)
-with open('src-tauri/Cargo.toml', 'r') as f:
-    c = f.read()
-c = re.sub(r'^version = "[^"]+"', f'version = "{v}"', c, count=1, flags=re.MULTILINE)
-with open('src-tauri/Cargo.toml', 'w') as f:
-    f.write(c)
-print('Done:', v)
-HEREDOC
-          python3 /tmp/sync_version.py "$VERSION"
-          grep '"version"' src-tauri/tauri.conf.json
+          python3 sync_version.py "$VERSION"
+          grep version src-tauri/tauri.conf.json
       - name: Tauri build
         env:
           GUMROAD_PRODUCT_PERMALINK: ${{ vars.GUMROAD_PRODUCT_PERMALINK }}
