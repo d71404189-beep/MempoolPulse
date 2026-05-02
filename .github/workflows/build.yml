@@ -85,10 +85,6 @@ jobs:
       - run: npm ci
       - name: Tauri build
         env:
-          # When `vars.GUMROAD_PRODUCT_PERMALINK` is unset, this env var is an
-          # empty string, which makes the license gate accept any non-empty key.
-          # Set the repo variable once you list the product on Gumroad to enable
-          # real license validation.
           GUMROAD_PRODUCT_PERMALINK: ${{ vars.GUMROAD_PRODUCT_PERMALINK }}
         run: npx tauri build --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
@@ -97,3 +93,38 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/**
             !**/*.txt
+
+  release:
+    name: Publish GitHub Release
+    needs: bundle
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download all bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: bundles
+
+      - name: Collect installer files
+        run: |
+          mkdir release_files
+          find bundles -type f \( \
+            -name "*.exe" \
+            -o -name "*.dmg" \
+            -o -name "*.deb" \
+            -o -name "*.AppImage" \
+          \) -exec cp {} release_files/ \;
+          ls release_files/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: MempoolPulse ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: release_files/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
