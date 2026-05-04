@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "mempoolpulse",
-  "version": "1.7.2",
+  "version": "1.7.18",
   "identifier": "com.mempoolpulse.app",
   "build": {
     "beforeDevCommand": "npm run dev",
