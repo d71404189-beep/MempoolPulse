@@ -82,13 +82,17 @@ pub async fn simulate(app: AppHandle, chain: ChainConfig, tx_hash: String) -> Re
     let block_number = fetch_block_number(&chain.rpc_http_url).await.unwrap_or(0);
 
     // Step 2: spawn anvil in fork mode and discover its port.
+    //
+    // NOTE: we intentionally omit `--silent` here. Foundry v1.7+ suppresses
+    // the "Listening on …" banner when `--silent` is set, which prevents us
+    // from discovering the randomly assigned port.  `--no-mining` alone is
+    // enough to suppress the empty-block heartbeat logs we wanted to avoid.
     let mut child = Command::new(&anvil_bin)
         .args([
             "--fork-url",
             chain.rpc_http_url.as_str(),
             "--port",
             "0",
-            "--silent",
             "--no-mining",
         ])
         .stdout(Stdio::piped())
@@ -101,9 +105,20 @@ pub async fn simulate(app: AppHandle, chain: ChainConfig, tx_hash: String) -> Re
         .stdout
         .take()
         .ok_or_else(|| anyhow!("anvil stdout unavailable"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("anvil stderr unavailable"))?;
     let mut guard = AnvilGuard { child: Some(child) };
 
-    let port = match timeout(Duration::from_secs(30), wait_for_port(stdout)).await {
+    // Some anvil versions print "Listening on …" to stdout, others to
+    // stderr.  Race both streams so we catch it regardless.
+    let port = match timeout(
+        Duration::from_secs(30),
+        wait_for_port_any(stdout, stderr),
+    )
+    .await
+    {
         Ok(Ok(p)) => p,
         Ok(Err(e)) => {
             guard.shutdown().await;
@@ -399,21 +414,37 @@ async fn fetch_block_number(http_url: &str) -> Result<u64> {
     Ok(v.as_str().and_then(parse_u64_hex).unwrap_or(0))
 }
 
-async fn wait_for_port<R>(stdout: R) -> Result<u16>
+/// Scan a single reader line-by-line for the "Listening on …:PORT" banner.
+/// Returns `Some(port)` as soon as the line is found or `None` when EOF.
+async fn scan_for_port<R>(reader: R) -> Option<u16>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    let mut reader = BufReader::new(stdout).lines();
-    while let Some(line) = reader.next_line().await? {
+    let mut lines = BufReader::new(reader).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
         if let Some(rest) = line.split_once("Listening on") {
             let part = rest.1.trim();
-            // Format examples: "127.0.0.1:50321", "0.0.0.0:50321".
             if let Some(port_str) = part.rsplit(':').next() {
                 if let Ok(p) = port_str.trim().parse::<u16>() {
-                    return Ok(p);
+                    return Some(p);
                 }
             }
         }
     }
-    Err(anyhow!("anvil exited before binding a port"))
+    None
+}
+
+/// Race stdout and stderr — whichever emits the "Listening on" line first
+/// wins.  This covers all foundry versions: older ones print it to stdout,
+/// newer ones may use stderr.
+async fn wait_for_port_any<O, E>(stdout: O, stderr: E) -> Result<u16>
+where
+    O: tokio::io::AsyncRead + Unpin,
+    E: tokio::io::AsyncRead + Unpin,
+{
+    tokio::select! {
+        Some(p) = scan_for_port(stdout) => Ok(p),
+        Some(p) = scan_for_port(stderr) => Ok(p),
+        else => Err(anyhow!("anvil exited before binding a port")),
+    }
 }
